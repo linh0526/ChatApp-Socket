@@ -1,4 +1,7 @@
 const Message = require('../models/Message');
+const Conversation = require('../models/Conversation');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
 let ioInstance = null;
 
@@ -12,17 +15,33 @@ const emitNewMessage = (message) => {
   }
 };
 
-const createMessageDocument = async ({ sender, content }) => {
+const createMessageDocument = async ({ sender, content, conversationId }) => {
   if (!sender || !content) {
     const error = new Error('sender and content are required');
     error.statusCode = 400;
     throw error;
   }
 
+  let conversation = null;
+  if (conversationId) {
+    conversation = await Conversation.findById(conversationId);
+    if (!conversation) {
+      const error = new Error('Conversation not found');
+      error.statusCode = 404;
+      throw error;
+    }
+  }
+
   const message = await Message.create({
     sender: sender.trim(),
     content: content.trim(),
+    conversation: conversation ? conversation._id : undefined,
   });
+
+  if (conversation) {
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+  }
 
   const plainMessage = message.toObject();
   emitNewMessage(plainMessage);
@@ -31,7 +50,9 @@ const createMessageDocument = async ({ sender, content }) => {
 
 const getMessages = async (req, res) => {
   try {
-    const messages = await Message.find().sort({ createdAt: 1 });
+    const { conversationId } = req.query || {};
+    const filter = conversationId ? { conversation: conversationId } : {};
+    const messages = await Message.find(filter).sort({ createdAt: 1 });
     res.json(messages);
   } catch (error) {
     console.error('Error fetching messages:', error);
@@ -41,7 +62,9 @@ const getMessages = async (req, res) => {
 
 const createMessage = async (req, res) => {
   try {
-    const message = await createMessageDocument(req.body);
+    const { content, conversationId } = req.body || {};
+    const sender = req.user?.username;
+    const message = await createMessageDocument({ sender, content, conversationId });
     res.status(201).json(message);
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -55,7 +78,10 @@ const createMessage = async (req, res) => {
 const registerSocketHandlers = (socket) => {
   socket.on('message:send', async (payload, callback) => {
     try {
-      const message = await createMessageDocument(payload ?? {});
+      const { token, content, conversationId } = payload ?? {};
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const sender = decoded.username;
+      const message = await createMessageDocument({ sender, content, conversationId });
       if (typeof callback === 'function') {
         callback({ status: 'ok', data: message });
       }
@@ -63,7 +89,10 @@ const registerSocketHandlers = (socket) => {
       if (typeof callback === 'function') {
         callback({
           status: 'error',
-          error: error.statusCode === 400 ? error.message : 'Failed to create message',
+          error:
+            error.statusCode === 400 || error.statusCode === 404 || error.name === 'JsonWebTokenError'
+              ? error.message
+              : 'Failed to create message',
         });
       }
 

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Đăng nhập</title>
+    <style>
+      body { font-family: Arial, sans-serif; background: #f6f7fb; margin: 0; padding: 0; }
+      .container { max-width: 360px; margin: 60px auto; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); }
+      h1 { margin: 0 0 16px; font-size: 22px; }
+      .field { margin-bottom: 12px; }
+      label { display: block; margin-bottom: 6px; font-size: 14px; color: #333; }
+      input { width: 100%; padding: 10px 12px; border: 1px solid #dcdfe6; border-radius: 8px; font-size: 14px; }
+      button { width: 100%; margin-top: 8px; padding: 10px 12px; background: #3b82f6; color: #fff; border: 0; border-radius: 8px; font-size: 15px; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .msg { margin-top: 10px; font-size: 13px; }
+      .link { margin-top: 12px; text-align: center; font-size: 14px; }
+      .link a { color: #3b82f6; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Đăng nhập</h1>
+      <form id="loginForm">
+        <div class="field">
+          <label for="emailOrUsername">Email hoặc Username</label>
+          <input id="emailOrUsername" name="emailOrUsername" required />
+        </div>
+        <div class="field">
+          <label for="password">Mật khẩu</label>
+          <input id="password" name="password" type="password" required />
+        </div>
+        <button id="submitBtn" type="submit">Đăng nhập</button>
+        <div id="msg" class="msg"></div>
+      </form>
+      <div class="link">Chưa có tài khoản? <a href="/register.html">Đăng ký</a></div>
+    </div>
+    <script>
+      const form = document.getElementById('loginForm');
+      const msg = document.getElementById('msg');
+      const submitBtn = document.getElementById('submitBtn');
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        msg.textContent = '';
+        submitBtn.disabled = true;
+        try {
+          const payload = {
+            emailOrUsername: document.getElementById('emailOrUsername').value.trim(),
+            password: document.getElementById('password').value
+          };
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Đăng nhập thất bại');
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
+          msg.style.color = 'green';
+          msg.textContent = 'Đăng nhập thành công!';
+          // Điều hướng demo: về trang đăng ký để test, bạn đổi sang trang chat sau
+          setTimeout(() => { window.location.href = '/register.html'; }, 700);
+        } catch (err) {
+          msg.style.color = 'crimson';
+          msg.textContent = err.message;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+  </html>
+
+
