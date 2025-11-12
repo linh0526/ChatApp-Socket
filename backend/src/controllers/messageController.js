@@ -76,6 +76,49 @@ const createMessage = async (req, res) => {
 };
 
 const registerSocketHandlers = (socket) => {
+  socket.on('message:list', async (payload, callback) => {
+    try {
+      const { token, conversationId } = payload ?? {};
+      if (!token) {
+        throw Object.assign(new Error('Authentication token is required'), { statusCode: 401 });
+      }
+
+      jwt.verify(token, JWT_SECRET);
+
+      const filter = conversationId ? { conversation: conversationId } : {};
+      const messages = await Message.find(filter).sort({ createdAt: 1 }).lean();
+
+      const serialized = messages.map((message) => ({
+        ...message,
+        _id: message._id?.toString?.() ?? message._id,
+        conversation: message.conversation?.toString?.(),
+        createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : message.createdAt,
+        updatedAt: message.updatedAt instanceof Date ? message.updatedAt.toISOString() : message.updatedAt,
+      }));
+
+      if (typeof callback === 'function') {
+        callback({ status: 'ok', data: serialized });
+      }
+    } catch (error) {
+      if (typeof callback === 'function') {
+        callback({
+          status: 'error',
+          error:
+            error.statusCode === 400 ||
+            error.statusCode === 401 ||
+            error.statusCode === 404 ||
+            error.name === 'JsonWebTokenError'
+              ? error.message
+              : 'Failed to fetch messages',
+        });
+      }
+
+      if (!error.statusCode || error.statusCode >= 500) {
+        console.error('Error handling socket message:list:', error);
+      }
+    }
+  });
+
   socket.on('message:send', async (payload, callback) => {
     try {
       const { token, content, conversationId } = payload ?? {};

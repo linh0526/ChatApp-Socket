@@ -29,15 +29,37 @@ export function clearAuth() {
   localStorage.removeItem(USER_KEY);
 }
 
+async function parseJson<T>(response: Response): Promise<T | null> {
+  try {
+    const text = await response.text();
+    if (!text) return null;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+function extractErrorMessage(payload: unknown, fallback: string) {
+  if (payload && typeof payload === 'object' && 'error' in payload) {
+    const { error } = payload as { error?: unknown };
+    if (typeof error === 'string' && error.trim().length > 0) {
+      return error;
+    }
+  }
+  return fallback;
+}
+
 export async function apiLogin(emailOrUsername: string, password: string) {
   const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ emailOrUsername, password }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || 'Đăng nhập thất bại');
-  return data as { token: string; user: AuthUser };
+  const data = await parseJson<{ token: string; user: AuthUser; error?: string }>(res);
+  if (!res.ok || !data) {
+    throw new Error(extractErrorMessage(data, 'Đăng nhập thất bại'));
+  }
+  return data;
 }
 
 export async function apiRegister(username: string, email: string, password: string) {
@@ -46,9 +68,11 @@ export async function apiRegister(username: string, email: string, password: str
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, email, password }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || 'Đăng ký thất bại');
-  return data as { token: string; user: AuthUser };
+  const data = await parseJson<{ token: string; user: AuthUser; error?: string }>(res);
+  if (!res.ok || !data) {
+    throw new Error(extractErrorMessage(data, 'Đăng ký thất bại'));
+  }
+  return data;
 }
 
 export function authHeaders(): HeadersInit {

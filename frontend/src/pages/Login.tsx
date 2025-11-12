@@ -1,15 +1,22 @@
 import { useState } from 'react';
 import { useAuth } from '../AuthContext';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 
-export default function Login({ goRegister, goChat }: { goRegister: () => void; goChat: () => void }) {
+interface LoginProps {
+  goRegister: () => void;
+  goChat: () => void;
+}
+
+export default function Login({ goRegister, goChat }: LoginProps) {
   const { login } = useAuth();
   const [emailOrUsername, setEmailOrUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     setError(null);
     setLoading(true);
     try {
@@ -23,25 +30,68 @@ export default function Login({ goRegister, goChat }: { goRegister: () => void; 
   };
 
   return (
-    <div className="app" style={{ maxWidth: 420 }}>
-      <h1>Đăng nhập</h1>
-      {error && <p className="error">{error}</p>}
-      <form className="composer" onSubmit={submit}>
-        <label>
-          Email hoặc Username
-          <input value={emailOrUsername} onChange={(e) => setEmailOrUsername(e.target.value)} />
-        </label>
-        <label>
-          Mật khẩu
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
-        <button type="submit" disabled={loading}>{loading ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
-      </form>
-      <div style={{ textAlign: 'center' }}>
-        <button className="refresh" onClick={goRegister} disabled={loading}>Chưa có tài khoản? Đăng ký</button>
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-panel">
+        <div className="space-y-2 text-center">
+          <h1 className="text-2xl font-semibold text-slate-900">Đăng nhập</h1>
+          <p className="text-sm text-slate-500">Chào mừng bạn quay lại với Chat App</p>
+        </div>
+
+        {error && (
+          <div className="mt-6 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+
+        <form className="mt-6 space-y-5" onSubmit={submit}>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-700" htmlFor="login-identifier">
+              Email hoặc Username
+            </label>
+            <Input
+              id="login-identifier"
+              placeholder="nguyenvana hoặc email@example.com"
+              autoComplete="username"
+              value={emailOrUsername}
+              onChange={(event) => setEmailOrUsername(event.target.value)}
+              disabled={loading}
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-700" htmlFor="login-password">
+              Mật khẩu
+            </label>
+            <Input
+              id="login-password"
+              type="password"
+              placeholder="••••••••"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              disabled={loading}
+              required
+            />
+          </div>
+
+          <Button type="submit" className="w-full rounded-full py-2" disabled={loading}>
+            {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
+          </Button>
+        </form>
+
+        <div className="mt-6 text-center">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full rounded-full"
+            onClick={goRegister}
+            disabled={loading}
+          >
+            Chưa có tài khoản? Đăng ký
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
-
-
