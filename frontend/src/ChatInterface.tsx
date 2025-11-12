@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Info, Phone, Send, Video } from 'lucide-react';
+import { Info, Mic, Phone, Send, Square, Video } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Avatar, AvatarFallback } from './ui/avatar';
@@ -20,6 +20,12 @@ interface ChatInterfaceProps {
   sending: boolean;
   loading: boolean;
   onRetry?: () => void;
+  onVoiceMessage?: () => void | Promise<void>;
+  voiceMessagePending?: boolean;
+  onVoiceMessageStop?: () => boolean | Promise<boolean>;
+  onVoiceMessageSend?: () => void | Promise<void>;
+  onVoiceMessageCancel?: () => void | Promise<void>;
+  voiceRecordingReady?: boolean;
 }
 
 const getInitials = (text: string) =>
@@ -43,9 +49,16 @@ export function ChatInterface({
   sending,
   loading,
   onRetry,
+  onVoiceMessage,
+  voiceMessagePending,
+  onVoiceMessageStop,
+  onVoiceMessageSend,
+  onVoiceMessageCancel,
+  voiceRecordingReady,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
+  const [voiceComposerState, setVoiceComposerState] = useState<'idle' | 'recording' | 'review'>('idle');
 
   const conversationDisplay = useMemo<ConversationPreview | null>(() => {
     if (conversation) return conversation;
@@ -76,6 +89,12 @@ export function ChatInterface({
   }, [conversationDisplay?.id]);
 
   useEffect(() => {
+    if (!isConversationSelected) {
+      setVoiceComposerState('idle');
+    }
+  }, [isConversationSelected]);
+
+  useEffect(() => {
     if (!conversationDisplay?.id) return;
     if (!onRetry) return;
     if (loading) return;
@@ -91,6 +110,100 @@ export function ChatInterface({
   const handleSubmit = () => {
     if (!inputValue.trim() || sending || !isConversationSelected) return;
     onSend();
+  };
+
+  const handleVoiceMessageStart = async () => {
+    if (!isConversationSelected) return;
+    if (voiceComposerState !== 'idle') return;
+    setVoiceComposerState('recording');
+    try {
+      await onVoiceMessage?.();
+    } catch (error) {
+      console.error('Failed to start voice message recording:', error);
+      setVoiceComposerState('idle');
+    }
+  };
+
+  const handleVoiceMessageStop = async () => {
+    if (!isConversationSelected) return;
+    if (voiceComposerState !== 'recording') return;
+    setVoiceComposerState('review');
+    let hasRecording = true;
+    try {
+      const result = await onVoiceMessageStop?.();
+      if (typeof result === 'boolean') {
+        hasRecording = result;
+      }
+    } catch (error) {
+      console.error('Failed to stop voice message recording:', error);
+      hasRecording = false;
+    }
+
+    if (!hasRecording) {
+      window.alert('Không tìm thấy ghi âm. Vui lòng thử lại.');
+      setVoiceComposerState('idle');
+      return;
+    }
+  };
+
+  const handleVoiceMessageCancel = async () => {
+    if (voiceMessagePending) return;
+    setVoiceComposerState('idle');
+    try {
+      await onVoiceMessageCancel?.();
+    } catch (error) {
+      console.error('Failed to cancel voice message recording:', error);
+    }
+  };
+
+  const executeVoiceMessageSend = () => {
+    if (voiceMessagePending) return;
+    const finalize = () => setVoiceComposerState('idle');
+    if (onVoiceMessageSend) {
+      Promise.resolve(onVoiceMessageSend())
+        .catch((error) => {
+          console.error('Failed to send voice message:', error);
+        })
+        .finally(finalize);
+      return;
+    }
+    finalize();
+  };
+
+  const handleVoiceMessageSend = () => {
+    if (!isConversationSelected) return;
+    if (voiceComposerState !== 'review') return;
+    if (!voiceRecordingReady) {
+      window.alert('Ghi âm chưa sẵn sàng. Vui lòng đợi trong giây lát.');
+      return;
+    }
+    executeVoiceMessageSend();
+  };
+
+  const handleVoiceMessageSendDirect = async () => {
+    if (!isConversationSelected) return;
+    if (voiceMessagePending) return;
+    if (voiceComposerState !== 'recording') {
+      handleVoiceMessageSend();
+      return;
+    }
+    setVoiceComposerState('review');
+    let hasRecording = true;
+    try {
+      const result = await onVoiceMessageStop?.();
+      if (typeof result === 'boolean') {
+        hasRecording = result;
+      }
+    } catch (error) {
+      console.error('Failed to stop voice message before sending:', error);
+      hasRecording = false;
+    }
+    if (!hasRecording) {
+      window.alert('Ghi âm chưa sẵn sàng. Vui lòng thử lại.');
+      setVoiceComposerState('idle');
+      return;
+    }
+    executeVoiceMessageSend();
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -169,7 +282,32 @@ export function ChatInterface({
                     isCurrentUser ? 'chat-bubble--outgoing' : 'chat-bubble--incoming'
                   } ${hasError ? 'border border-red-300 bg-red-50' : ''}`}
                 >
-                  <p className="whitespace-pre-line">{message.content}</p>
+                  {message.voiceRecording ? (
+                    <div className="flex flex-col gap-2">
+                      {message.voiceRecording.url ? (
+                        <audio
+                          controls
+                          preload="metadata"
+                          src={message.voiceRecording.url}
+                          className="w-60 max-w-full"
+                        >
+                          Trình duyệt của bạn không hỗ trợ phát tin nhắn thoại.
+                        </audio>
+                      ) : (
+                        <p className="text-sm text-slate-500">Không thể phát tin nhắn thoại.</p>
+                      )}
+                      {message.voiceRecording.originalName && (
+                        <p className="text-xs text-slate-500">
+                          {message.voiceRecording.originalName}
+                        </p>
+                      )}
+                      {message.content && (
+                        <p className="text-xs text-slate-500">{message.content}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-line">{message.content}</p>
+                  )}
                   {hasError && (
                     <p className="mt-1 text-xs text-red-600">{message.error}</p>
                   )}
@@ -237,24 +375,103 @@ export function ChatInterface({
       </ScrollArea>
 
       <div className="chat-interface__composer">
-        <div className="mx-auto flex w-full max-w-3xl gap-3">
-          <Input
-            type="text"
-            placeholder={isConversationSelected ? "Aa" : "Chọn cuộc trò chuyện để nhắn tin"}
-            value={inputValue}
-            onChange={(event) => onInputChange(event.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={sending || !isConversationSelected}
-            className="flex-1 rounded-full bg-white"
-          />
-          <Button
-            onClick={handleSubmit}
-            size="icon"
-            className="rounded-full"
-            disabled={sending || !inputValue.trim() || !isConversationSelected}
-          >
-            <Send className="size-4" />
-          </Button>
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
+          {voiceComposerState === 'idle' && (
+            <>
+              <Input
+                type="text"
+                placeholder={isConversationSelected ? "Aa" : "Chọn cuộc trò chuyện để nhắn tin"}
+                value={inputValue}
+                onChange={(event) => onInputChange(event.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={sending || !isConversationSelected}
+                className="flex-1 rounded-full bg-white"
+              />
+              <Button
+                onClick={handleVoiceMessageStart}
+                size="icon"
+                className="rounded-full"
+                variant="outline"
+                disabled={!isConversationSelected}
+                title="Gửi tin nhắn thoại"
+                aria-label="Gửi tin nhắn thoại"
+              >
+                <Mic className="size-4" />
+              </Button>
+              <Button
+                onClick={handleSubmit}
+                size="icon"
+                className="rounded-full"
+                disabled={sending || !inputValue.trim() || !isConversationSelected}
+              >
+                <Send className="size-4" />
+              </Button>
+            </>
+          )}
+
+          {voiceComposerState === 'recording' && (
+            <>
+              <div className="flex flex-1 items-center justify-between rounded-full bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+                <span>Đang ghi âm...</span>
+              </div>
+              <Button
+                onClick={handleVoiceMessageStop}
+                size="icon"
+                className="rounded-full bg-red-500 text-white hover:bg-red-600"
+                title="Dừng ghi âm"
+                aria-label="Dừng ghi âm"
+              >
+                <Square className="size-4" />
+              </Button>
+              <Button
+                onClick={handleVoiceMessageSendDirect}
+                size="icon"
+                className="rounded-full"
+                disabled={voiceMessagePending}
+                title="Gửi tin nhắn thoại"
+                aria-label="Gửi tin nhắn thoại"
+              >
+                <Send className="size-4" />
+              </Button>
+              <Button
+                onClick={handleVoiceMessageCancel}
+                variant="ghost"
+                className="rounded-full"
+                title="Hủy ghi âm"
+                aria-label="Hủy ghi âm"
+              >
+                Hủy
+              </Button>
+            </>
+          )}
+
+          {voiceComposerState === 'review' && (
+            <>
+              <div className="flex flex-1 items-center justify-between rounded-full bg-slate-100 px-4 py-3 text-sm text-slate-600">
+                <span>{voiceRecordingReady ? 'Ghi âm sẵn sàng để gửi' : 'Đang xử lý ghi âm...'}</span>
+              </div>
+              <Button
+                onClick={handleVoiceMessageCancel}
+                variant="ghost"
+                className="rounded-full"
+                title="Ghi lại"
+                aria-label="Ghi lại"
+                disabled={voiceMessagePending}
+              >
+                Ghi lại
+              </Button>
+              <Button
+                onClick={handleVoiceMessageSend}
+                size="icon"
+                className="rounded-full"
+                disabled={voiceMessagePending || !voiceRecordingReady}
+                title="Gửi tin nhắn thoại"
+                aria-label="Gửi tin nhắn thoại"
+              >
+                <Send className="size-4" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>

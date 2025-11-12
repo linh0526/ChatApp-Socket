@@ -13,12 +13,23 @@ import type {
   FriendSummary,
 } from './friendTypes';
 
+type VoiceRecording = {
+  url: string;
+  fileName: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+  relativePath?: string;
+};
+
 type Message = {
   _id: string;
   sender: string;
   content: string;
   createdAt: string;
   conversation?: string | null;
+  messageType?: 'text' | 'voice';
+  voiceRecording?: VoiceRecording | null;
 };
 
 type ConversationParticipantResponse = {
@@ -127,6 +138,200 @@ function Chat() {
   const [friendSearchError, setFriendSearchError] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const conversationsRef = useRef<ConversationPreview[]>(conversations);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceMessageBlobRef = useRef<Blob | null>(null);
+  const [voiceMessagePending, setVoiceMessagePending] = useState(false);
+  const [voiceRecordingReady, setVoiceRecordingReady] = useState(false);
+
+  const assetBaseUrl = useMemo(() => {
+    if (API_BASE_URL) {
+      return API_BASE_URL.replace(/\/$/, '');
+    }
+    if (typeof window !== 'undefined') {
+      return window.location.origin.replace(/\/$/, '');
+    }
+    return '';
+  }, []);
+
+  const withVoiceUrl = useCallback(
+    (message: Message): Message => {
+      const voice = message.voiceRecording;
+      if (!voice) {
+        return { ...message, voiceRecording: voice ?? undefined };
+      }
+
+      if (!voice.url) {
+        return { ...message, voiceRecording: { ...voice } };
+      }
+
+      const isAbsolute = /^https?:\/\//i.test(voice.url);
+      const resolvedUrl = isAbsolute
+        ? voice.url
+        : `${assetBaseUrl}${voice.url.startsWith('/') ? '' : '/'}${voice.url}`;
+
+      return {
+        ...message,
+        voiceRecording: {
+          ...voice,
+          url: resolvedUrl,
+        },
+      };
+    },
+    [assetBaseUrl],
+  );
+
+  type RecorderStopDeferred = {
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (reason?: unknown) => void;
+  };
+
+  const recorderStopDeferredRef = useRef<RecorderStopDeferred | null>(null);
+
+  const getOrCreateRecorderStopDeferred = useCallback(() => {
+    if (recorderStopDeferredRef.current) {
+      return recorderStopDeferredRef.current;
+    }
+    let resolve!: () => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const deferred: RecorderStopDeferred = { promise, resolve, reject };
+    recorderStopDeferredRef.current = deferred;
+    return deferred;
+  }, []);
+  const cleanupVoiceStream = useCallback(() => {
+    const stream = voiceStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      voiceStreamRef.current = null;
+    }
+  }, []);
+
+  const startVoiceMessage = useCallback(async () => {
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      const message = 'Trình duyệt của bạn không hỗ trợ ghi âm.';
+      console.error(message);
+      window.alert(message);
+      throw new Error(message);
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      const message = 'Trình duyệt của bạn không hỗ trợ MediaRecorder.';
+      console.error(message);
+      window.alert(message);
+      throw new Error(message);
+    }
+
+    try {
+      voiceChunksRef.current = [];
+      voiceMessageBlobRef.current = null;
+      setVoiceRecordingReady(false);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data?.size > 0) {
+          voiceChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        try {
+          if (voiceChunksRef.current.length > 0) {
+            voiceMessageBlobRef.current = new Blob(voiceChunksRef.current, {
+              type: recorder.mimeType || 'audio/webm',
+            });
+            setVoiceRecordingReady(true);
+          } else {
+            voiceMessageBlobRef.current = null;
+            setVoiceRecordingReady(false);
+          }
+        } finally {
+          cleanupVoiceStream();
+          voiceChunksRef.current = [];
+          mediaRecorderRef.current = null;
+          recorderStopDeferredRef.current?.resolve();
+          recorderStopDeferredRef.current = null;
+        }
+      };
+
+      recorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        recorderStopDeferredRef.current?.reject(
+          (event as { error?: unknown })?.error ?? event,
+        );
+        recorderStopDeferredRef.current = null;
+        cleanupVoiceStream();
+        mediaRecorderRef.current = null;
+        voiceChunksRef.current = [];
+        voiceMessageBlobRef.current = null;
+        setVoiceRecordingReady(false);
+      };
+
+      recorder.start();
+    } catch (error) {
+      cleanupVoiceStream();
+      mediaRecorderRef.current = null;
+      voiceChunksRef.current = [];
+      setVoiceRecordingReady(false);
+      const message =
+        error instanceof DOMException && error.name === 'NotAllowedError'
+          ? 'Bạn đã từ chối quyền micro. Vui lòng cho phép trong cài đặt trình duyệt.'
+          : 'Không thể truy cập micro. Vui lòng kiểm tra quyền trong trình duyệt.';
+      console.error('startVoiceMessage error:', error);
+      window.alert(message);
+      throw error;
+    }
+  }, [cleanupVoiceStream]);
+
+  const stopVoiceMessage = useCallback(async () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      const deferred = getOrCreateRecorderStopDeferred();
+      recorder.stop();
+      await deferred.promise;
+    }
+    return Boolean(voiceMessageBlobRef.current);
+  }, [getOrCreateRecorderStopDeferred]);
+
+  const cancelVoiceMessage = useCallback(async () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      const deferred = getOrCreateRecorderStopDeferred();
+      recorder.stop();
+      try {
+        await deferred.promise;
+      } catch (error) {
+        console.error('cancelVoiceMessage stop error:', error);
+      }
+    } else {
+      cleanupVoiceStream();
+    }
+    mediaRecorderRef.current = null;
+    voiceChunksRef.current = [];
+    voiceMessageBlobRef.current = null;
+    setVoiceRecordingReady(false);
+  }, [cleanupVoiceStream, getOrCreateRecorderStopDeferred]);
+
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        const deferred = getOrCreateRecorderStopDeferred();
+        recorder.stop();
+        deferred.promise.catch(() => {
+          /* ignore */
+        });
+      }
+      cleanupVoiceStream();
+    };
+  }, [cleanupVoiceStream, getOrCreateRecorderStopDeferred]);
 
   const updateConversations = useCallback(
     (updater: (prev: ConversationPreview[]) => ConversationPreview[]) => {
@@ -566,7 +771,8 @@ function Chat() {
                   },
                 );
             });
-            const sorted = sortMessagesAsc(data);
+            const normalized = data.map(withVoiceUrl);
+            const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
             updateConversationFromMessages(targetConversationId, sorted);
             if (targetConversationId === selectedConversationId) {
@@ -583,7 +789,8 @@ function Chat() {
             });
             if (!response.ok) throw new Error('Không thể tải danh sách tin nhắn');
             const data: Message[] = await response.json();
-            const sorted = sortMessagesAsc(data);
+            const normalized = data.map(withVoiceUrl);
+            const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
             updateConversationFromMessages(targetConversationId, sorted);
             if (targetConversationId === selectedConversationId) {
@@ -599,7 +806,8 @@ function Chat() {
           });
           if (!response.ok) throw new Error('Không thể tải danh sách tin nhắn');
           const data: Message[] = await response.json();
-          const sorted = sortMessagesAsc(data);
+          const normalized = data.map(withVoiceUrl);
+          const sorted = sortMessagesAsc(normalized);
           setMessages(sorted);
           updateConversationFromMessages(targetConversationId, sorted);
           if (targetConversationId === selectedConversationId) {
@@ -618,8 +826,95 @@ function Chat() {
         }
       }
     },
-    [selectedConversationId, token, updateConversationFromMessages],
+    [selectedConversationId, token, updateConversationFromMessages, withVoiceUrl],
   );
+
+  const handleIncomingMessage = useCallback(
+    (message: Message) => {
+      const normalizedMessage = withVoiceUrl(message);
+      const rawConversationId =
+        typeof normalizedMessage.conversation === 'string'
+          ? normalizedMessage.conversation.trim()
+          : null;
+      const conversationId = rawConversationId || selectedConversationId;
+
+      if (!conversationId) {
+        return;
+      }
+
+      const existed = conversationsRef.current.some(
+        (conversation) => conversation.id === conversationId,
+      );
+      const isCurrent = conversationId === selectedConversationId;
+
+      if (isCurrent) {
+        setMessages((prev) => {
+          const exists = prev.some((item) => item._id === normalizedMessage._id);
+          if (exists) return prev;
+          return sortMessagesAsc([...prev, normalizedMessage]);
+        });
+      }
+
+      updateConversationPreviewFromMessage(conversationId, normalizedMessage, isCurrent);
+
+      if (!existed && rawConversationId) {
+        void fetchConversations();
+      }
+    },
+    [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage, withVoiceUrl],
+  );
+
+  const sendVoiceMessage = useCallback(async () => {
+    const blob = voiceMessageBlobRef.current;
+    if (!blob) {
+      window.alert('Không có ghi âm để gửi. Vui lòng thử lại.');
+      return;
+    }
+    if (!selectedConversationId) {
+      window.alert('Vui lòng chọn một cuộc trò chuyện để gửi tin nhắn thoại.');
+      return;
+    }
+    if (!token) {
+      window.alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      return;
+    }
+
+    setVoiceMessagePending(true);
+    try {
+      const fileName = `voice-message-${Date.now()}.webm`;
+      const endpoint = `${API_BASE_URL}/api/messages/voice?conversationId=${encodeURIComponent(
+        selectedConversationId,
+      )}`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': blob.type || 'audio/webm',
+          'X-Audio-Filename': fileName,
+        },
+        body: blob,
+      });
+
+      const payload = (await response.json()) as Message & { error?: string };
+      if (!response.ok) {
+        const errorMessage = payload?.error ?? 'Gửi tin nhắn thoại thất bại';
+        throw new Error(errorMessage);
+      }
+
+      const normalized = withVoiceUrl(payload);
+      handleIncomingMessage(normalized);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gửi tin nhắn thoại thất bại';
+      console.error('sendVoiceMessage error:', error);
+      window.alert(message);
+    } finally {
+      setVoiceMessagePending(false);
+      voiceChunksRef.current = [];
+      voiceMessageBlobRef.current = null;
+      setVoiceRecordingReady(false);
+    }
+  }, [handleIncomingMessage, selectedConversationId, token, withVoiceUrl]);
 
   const startConversationWithFriend = useCallback(
     async (friendId: string) => {
@@ -697,45 +992,14 @@ function Chat() {
     [token, user?.id, updateConversations, fetchMessages],
   );
 
-  const handleIncomingMessage = useCallback(
-    (message: Message) => {
-      // Handle messages with or without conversationId
-      const rawConversationId =
-        typeof message.conversation === 'string' ? message.conversation.trim() : null;
-      const conversationId = rawConversationId || selectedConversationId;
-      
-      if (!conversationId) {
-        return;
-      }
-
-      const existed = conversationsRef.current.some(
-        (conversation) => conversation.id === conversationId,
-      );
-      const isCurrent = conversationId === selectedConversationId;
-
-      if (isCurrent) {
-        setMessages((prev) => {
-          const exists = prev.some((item) => item._id === message._id);
-          if (exists) return prev;
-          return sortMessagesAsc([...prev, message]);
-        });
-      }
-
-      updateConversationPreviewFromMessage(conversationId, message, isCurrent);
-
-      if (!existed && rawConversationId) {
-        void fetchConversations();
-      }
-    },
-    [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage],
-  );
-
   const chatMessages = useMemo<ChatMessage[]>(() => {
     const result: ChatMessage[] = messages.map((message) => ({
       id: message._id,
       content: message.content,
       sender: message.sender,
       createdAt: message.createdAt,
+      messageType: message.messageType ?? 'text',
+      voiceRecording: message.voiceRecording ?? undefined,
     }));
 
     // Add pending messages with errors
@@ -748,6 +1012,7 @@ function Chat() {
           createdAt: new Date().toISOString(),
           error: pending.error,
           isPending: false,
+          messageType: 'text',
         });
       }
     });
@@ -1006,6 +1271,12 @@ function Chat() {
           friendActionPending={friendActionPending}
           friendSearchError={friendSearchError}
           onCreateGroupConversation={createGroupConversation}
+        onVoiceMessage={startVoiceMessage}
+        voiceMessagePending={voiceMessagePending}
+        onVoiceMessageStop={stopVoiceMessage}
+        onVoiceMessageSend={sendVoiceMessage}
+          onVoiceMessageCancel={cancelVoiceMessage}
+          voiceRecordingReady={voiceRecordingReady}
         />
       </div>
     </div>

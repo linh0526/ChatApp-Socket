@@ -1,5 +1,8 @@
+const fsPromises = require('fs/promises');
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
+const { encryptText, decryptText } = require('../utils/encryption');
+const { storeVoiceRecording } = require('../utils/storage');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
@@ -15,11 +18,49 @@ const emitNewMessage = (message) => {
   }
 };
 
-const createMessageDocument = async ({ senderId, sender, content, conversationId }) => {
-  if (!sender || !content) {
-    const error = new Error('sender and content are required');
+const VOICE_PLACEHOLDER_CONTENT = 'Tin nhắn thoại';
+
+const sanitizeVoiceRecording = (voiceRecording) => {
+  if (!voiceRecording) {
+    return undefined;
+  }
+  const { storagePath, ...rest } = voiceRecording;
+  return rest;
+};
+
+const createMessageDocument = async ({
+  senderId,
+  sender,
+  content,
+  conversationId,
+  messageType = 'text',
+  voiceRecording,
+}) => {
+  if (!sender) {
+    const error = new Error('sender is required');
     error.statusCode = 400;
     throw error;
+  }
+
+  const normalizedType = messageType === 'voice' ? 'voice' : 'text';
+  const trimmedSender = sender.trim();
+  let trimmedContent = typeof content === 'string' ? content.trim() : '';
+
+  if (normalizedType === 'text') {
+    if (!trimmedContent) {
+      const error = new Error('content is required');
+      error.statusCode = 400;
+      throw error;
+    }
+  } else if (normalizedType === 'voice') {
+    if (!voiceRecording) {
+      const error = new Error('voice recording metadata is required');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!trimmedContent) {
+      trimmedContent = VOICE_PLACEHOLDER_CONTENT;
+    }
   }
 
   let conversation = null;
@@ -43,9 +84,13 @@ const createMessageDocument = async ({ senderId, sender, content, conversationId
     }
   }
 
+  const encryptedContent = encryptText(trimmedContent);
+
   const message = await Message.create({
-    sender: sender.trim(),
-    content: content.trim(),
+    sender: trimmedSender,
+    content: encryptedContent,
+    messageType: normalizedType,
+    voiceRecording: normalizedType === 'voice' ? voiceRecording : undefined,
     conversation: conversation ? conversation._id : undefined,
   });
 
@@ -55,6 +100,9 @@ const createMessageDocument = async ({ senderId, sender, content, conversationId
   }
 
   const plainMessage = message.toObject();
+  plainMessage.content = trimmedContent;
+  plainMessage.voiceRecording = sanitizeVoiceRecording(plainMessage.voiceRecording);
+
   emitNewMessage(plainMessage);
   return plainMessage;
 };
@@ -78,7 +126,19 @@ const getMessages = async (req, res) => {
 
     const filter = conversationId ? { conversation: conversationId } : { conversation: null };
     const messages = await Message.find(filter).sort({ createdAt: 1 });
-    res.json(messages);
+    const decryptedMessages = messages.map((message) => {
+      const plain = message.toObject();
+      try {
+        plain.content = decryptText(plain.content);
+      } catch (error) {
+        console.error('Failed to decrypt message content:', error);
+        plain.content = '';
+      }
+      plain.voiceRecording = sanitizeVoiceRecording(plain.voiceRecording);
+      return plain;
+    });
+
+    res.json(decryptedMessages);
   } catch (error) {
     console.error('Error fetching messages:', error);
     res.status(500).json({ error: 'Failed to fetch messages' });
@@ -91,7 +151,13 @@ const createMessage = async (req, res) => {
     const sender = req.user?.username;
     const senderId = req.user?.id;
 
-    const message = await createMessageDocument({ senderId, sender, content, conversationId });
+    const message = await createMessageDocument({
+      senderId,
+      sender,
+      content,
+      conversationId,
+      messageType: 'text',
+    });
     res.status(201).json(message);
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -133,13 +199,30 @@ const registerSocketHandlers = (socket) => {
       const filter = conversationId ? { conversation: conversationId } : { conversation: null };
       const messages = await Message.find(filter).sort({ createdAt: 1 }).lean();
 
-      const serialized = messages.map((message) => ({
-        ...message,
-        _id: message._id?.toString?.() ?? message._id,
-        conversation: message.conversation?.toString?.(),
-        createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : message.createdAt,
-        updatedAt: message.updatedAt instanceof Date ? message.updatedAt.toISOString() : message.updatedAt,
-      }));
+      const serialized = messages.map((message) => {
+        let decryptedContent = '';
+        try {
+          decryptedContent = decryptText(message.content);
+        } catch (error) {
+          console.error('Failed to decrypt message content:', error);
+        }
+
+        return {
+          ...message,
+          content: decryptedContent,
+          voiceRecording: sanitizeVoiceRecording(message.voiceRecording),
+          _id: message._id?.toString?.() ?? message._id,
+          conversation: message.conversation?.toString?.(),
+          createdAt:
+            message.createdAt instanceof Date
+              ? message.createdAt.toISOString()
+              : message.createdAt,
+          updatedAt:
+            message.updatedAt instanceof Date
+              ? message.updatedAt.toISOString()
+              : message.updatedAt,
+        };
+      });
 
       if (typeof callback === 'function') {
         callback({ status: 'ok', data: serialized });
@@ -170,7 +253,13 @@ const registerSocketHandlers = (socket) => {
       const decoded = jwt.verify(token, JWT_SECRET);
       const sender = decoded.username;
       const senderId = decoded.id;
-      const message = await createMessageDocument({ senderId, sender, content, conversationId });
+      const message = await createMessageDocument({
+        senderId,
+        sender,
+        content,
+        conversationId,
+        messageType: 'text',
+      });
       if (typeof callback === 'function') {
         callback({ status: 'ok', data: message });
       }
@@ -192,5 +281,69 @@ const registerSocketHandlers = (socket) => {
   });
 };
 
-module.exports = { getMessages, createMessage, registerSocketHandlers, setSocketIO };
+const createVoiceMessage = async (req, res) => {
+  try {
+    const { conversationId } = req.query || {};
+    const sender = req.user?.username;
+    const senderId = req.user?.id;
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Dữ liệu ghi âm không hợp lệ' });
+    }
+
+    const contentType = req.headers['content-type'] || 'audio/webm';
+    if (!contentType.startsWith('audio/') && contentType !== 'application/octet-stream') {
+      return res.status(415).json({ error: 'Định dạng ghi âm không được hỗ trợ' });
+    }
+
+    const originalNameHeader = req.headers['x-audio-filename'];
+    const originalName = Array.isArray(originalNameHeader)
+      ? originalNameHeader[0]
+      : originalNameHeader;
+
+    let storedRecording = null;
+    try {
+      storedRecording = await storeVoiceRecording({
+        buffer: req.body,
+        mimeType: contentType,
+        originalName,
+        userId: senderId,
+      });
+    } catch (storageError) {
+      console.error('Failed to store voice recording:', storageError);
+      return res.status(500).json({ error: 'Không thể lưu trữ ghi âm' });
+    }
+
+    try {
+      const message = await createMessageDocument({
+        senderId,
+        sender,
+        content: VOICE_PLACEHOLDER_CONTENT,
+        conversationId,
+        messageType: 'voice',
+        voiceRecording: storedRecording,
+      });
+      res.status(201).json(message);
+    } catch (error) {
+      if (storedRecording?.storagePath) {
+        await fsPromises.unlink(storedRecording.storagePath).catch(() => {});
+      }
+      throw error;
+    }
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    if (statusCode >= 500) {
+      console.error('Error creating voice message:', error);
+    }
+    res.status(statusCode).json({ error: error.message || 'Failed to create voice message' });
+  }
+};
+
+module.exports = {
+  getMessages,
+  createMessage,
+  createVoiceMessage,
+  registerSocketHandlers,
+  setSocketIO,
+};
 

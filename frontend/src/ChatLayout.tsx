@@ -50,6 +50,12 @@ export interface ChatLayoutProps {
   friendActionPending: boolean;
   friendSearchError?: string | null;
   onCreateGroupConversation: (input: { name: string; memberIds: string[] }) => Promise<void>;
+  onVoiceMessage?: () => void | Promise<void>;
+  voiceMessagePending?: boolean;
+  onVoiceMessageStop?: () => boolean | Promise<boolean>;
+  onVoiceMessageSend?: () => void | Promise<void>;
+  onVoiceMessageCancel?: () => void | Promise<void>;
+  voiceRecordingReady?: boolean;
 }
 
 export function ChatLayout({
@@ -81,6 +87,12 @@ export function ChatLayout({
   friendSearchError,
   messagesError,
   onCreateGroupConversation,
+  onVoiceMessage,
+  voiceMessagePending,
+  onVoiceMessageStop,
+  onVoiceMessageSend,
+  onVoiceMessageCancel,
+  voiceRecordingReady,
 }: ChatLayoutProps) {
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId),
@@ -122,6 +134,12 @@ export function ChatLayout({
         sending={sending}
         loading={loading}
         onRetry={onRetry}
+        onVoiceMessage={onVoiceMessage}
+        voiceMessagePending={voiceMessagePending}
+        onVoiceMessageStop={onVoiceMessageStop}
+        onVoiceMessageSend={onVoiceMessageSend}
+        onVoiceMessageCancel={onVoiceMessageCancel}
+        voiceRecordingReady={voiceRecordingReady}
       />
     </div>
   );

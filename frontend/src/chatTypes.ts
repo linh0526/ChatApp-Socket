@@ -1,3 +1,11 @@
+export interface VoiceRecordingPayload {
+  url: string;
+  fileName: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+}
+
 export interface ChatMessage {
   id: string;
   sender: string;
@@ -5,5 +13,7 @@ export interface ChatMessage {
   createdAt: string;
   error?: string;
   isPending?: boolean;
+  messageType?: 'text' | 'voice';
+  voiceRecording?: VoiceRecordingPayload | null;
 }
 

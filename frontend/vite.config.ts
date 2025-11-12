@@ -14,6 +14,10 @@ export default defineConfig({
         target: process.env.VITE_PROXY_TARGET ?? 'http://localhost:5001',
         ws: true,
       },
+      '/uploads': {
+        target: process.env.VITE_PROXY_TARGET ?? 'http://localhost:5001',
+        changeOrigin: true,
+      },
     },
   },
 });
