@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  Check,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
   Search,
   SquarePen,
+  X,
   UserCheck,
   UserPlus,
   UserX,
@@ -13,6 +15,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Avatar, AvatarFallback } from './ui/avatar';
+import { ScrollArea } from './ui/scroll-area';
 import type { ConversationPreview } from './ChatLayout';
 import type {
   FriendActionFeedback,
@@ -40,6 +43,7 @@ interface ChatSidebarProps {
   onClearFriendFeedback: () => void;
   friendActionPending: boolean;
   friendSearchError?: string | null;
+  onCreateGroup: (input: { name: string; memberIds: string[] }) => Promise<void>;
 }
 
 type FilterType = 'all' | 'unread' | 'groups';
@@ -86,13 +90,35 @@ export function ChatSidebar({
   onClearFriendFeedback,
   friendActionPending,
   friendSearchError,
+  onCreateGroup,
 }: ChatSidebarProps) {
   const [conversationSearchQuery, setConversationSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [activeSection, setActiveSection] = useState<Section>('conversations');
   const [friendSearchQuery, setFriendSearchQuery] = useState('');
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [groupSearchQuery, setGroupSearchQuery] = useState('');
+  const [groupName, setGroupName] = useState('');
+  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
+  const [groupCreateError, setGroupCreateError] = useState<string | null>(null);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
+  useEffect(() => {
+    if (!createGroupOpen) {
+      setGroupName('');
+      setGroupSearchQuery('');
+      setSelectedGroupMemberIds([]);
+      setGroupCreateError(null);
+      setCreatingGroup(false);
+    }
+  }, [createGroupOpen]);
+
+  useEffect(() => {
+    setSelectedGroupMemberIds((prev) =>
+      prev.filter((id) => friends.some((friend) => friend.id === id)),
+    );
+  }, [friends]);
 
   const filteredConversations = useMemo(() => {
     const query = conversationSearchQuery.trim().toLowerCase();
@@ -121,6 +147,94 @@ export function ChatSidebar({
     });
   }, [conversations, filter, conversationSearchQuery]);
 
+  const filteredGroupFriends = useMemo(() => {
+    const query = groupSearchQuery.trim().toLowerCase();
+    const base = query.length
+      ? friends.filter((friend) => {
+          const haystack = [friend.username, friend.email].filter(Boolean).join(' ').toLowerCase();
+          return haystack.includes(query);
+        })
+      : friends;
+    return [...base].sort((a, b) => {
+      const nameA = a.username ?? '';
+      const nameB = b.username ?? '';
+      return nameA.localeCompare(nameB);
+    });
+  }, [friends, groupSearchQuery]);
+
+  const groupedFriends = useMemo(() => {
+    return filteredGroupFriends.reduce<Record<string, FriendSummary[]>>((acc, friend) => {
+      const initial = friend.username?.[0]?.toUpperCase() ?? '#';
+      if (!acc[initial]) {
+        acc[initial] = [];
+      }
+      acc[initial].push(friend);
+      return acc;
+    }, {});
+  }, [filteredGroupFriends]);
+
+  const groupedFriendEntries = useMemo(
+    () => Object.entries(groupedFriends).sort(([a], [b]) => a.localeCompare(b)),
+    [groupedFriends],
+  );
+
+  const recentConversationPreviews = useMemo(() => {
+    const query = groupSearchQuery.trim().toLowerCase();
+    const source =
+      query.length > 0
+        ? filteredConversations.filter((conversation) => {
+            const haystack = [
+              conversation.title,
+              conversation.subtitle,
+              conversation.lastMessageSnippet,
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+            return haystack.includes(query);
+          })
+        : filteredConversations;
+    return source.slice(0, 6);
+  }, [filteredConversations, groupSearchQuery]);
+
+  const toggleGroupMember = (friendId: string) => {
+    setSelectedGroupMemberIds((prev) =>
+      prev.includes(friendId) ? prev.filter((id) => id !== friendId) : [...prev, friendId],
+    );
+  };
+
+  const closeGroupModal = () => {
+    setCreateGroupOpen(false);
+  };
+
+  const handleCreateGroup = async () => {
+    const trimmedName = groupName.trim();
+    if (trimmedName.length === 0) {
+      setGroupCreateError('Vui lòng nhập tên nhóm');
+      return;
+    }
+    if (selectedGroupMemberIds.length < 2) {
+      setGroupCreateError('Vui lòng chọn ít nhất 2 thành viên');
+      return;
+    }
+    setCreatingGroup(true);
+    setGroupCreateError(null);
+    try {
+      await onCreateGroup({ name: trimmedName, memberIds: selectedGroupMemberIds });
+      closeGroupModal();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Không thể tạo nhóm trò chuyện';
+      setGroupCreateError(message);
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  const selectedGroupCount = selectedGroupMemberIds.length;
+  const canSubmitGroup =
+    groupName.trim().length > 0 && selectedGroupMemberIds.length >= 2 && !creatingGroup;
+
   const handleFriendSearchSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     await onSearch(friendSearchQuery);
@@ -130,29 +244,6 @@ export function ChatSidebar({
     setFriendSearchQuery(value);
     if (value.trim().length === 0) {
       void onSearch('');
-    }
-  };
-
-  const handleInviteSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmed = inviteEmail.trim();
-    if (trimmed.length === 0) {
-      setInviteError('Vui lòng nhập email');
-      return;
-    }
-    const emailRegex =
-      // eslint-disable-next-line no-useless-escape
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(trimmed)) {
-      setInviteError('Email không hợp lệ');
-      return;
-    }
-    setInviteError(null);
-    try {
-      await onSendFriendRequest({ email: trimmed });
-      setInviteEmail('');
-    } catch {
-      // handled in parent via friendFeedback
     }
   };
 
@@ -178,7 +269,7 @@ export function ChatSidebar({
                     <MoreHorizontal className="size-5" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-56 p-2" align="end">
+                <PopoverContent className="w-56 p-2 bg-white" align="end">
                   <div className="flex flex-col">
                     <button
                       type="button"
@@ -195,9 +286,72 @@ export function ChatSidebar({
                   </div>
                 </PopoverContent>
               </Popover>
-              <Button variant="ghost" size="icon" className="size-9 rounded-full">
-                <SquarePen className="size-5" />
-              </Button>
+              <Popover open={newChatOpen} onOpenChange={setNewChatOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="icon" className="size-9 rounded-full">
+                    <SquarePen className="size-5" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="flex h-[22rem] w-80 flex-col bg-white p-0" align="end">
+                  <div className="border-b border-gray-200 p-3">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-full justify-start px-0 text-left text-sm font-medium text-blue-600 hover:bg-transparent hover:text-blue-700"
+                      onClick={() => {
+                        setNewChatOpen(false);
+                        setCreateGroupOpen(true);
+                      }}
+                    >
+                      Tạo nhóm chat
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-1 flex-col overflow-hidden">
+                    <div className="px-3 py-2">
+                      <h3 className="text-sm">Danh bạ của bạn</h3>
+                    </div>
+                    <ScrollArea className="flex-1">
+                      <div className="px-2 pb-2">
+                        {friends.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                            Bạn chưa có bạn bè nào để bắt đầu cuộc trò chuyện mới.
+                          </div>
+                        ) : (
+                          friends.map((friend) => (
+                            <button
+                              key={friend.id}
+                              type="button"
+                              onClick={async () => {
+                                setNewChatOpen(false);
+                                try {
+                                  await onStartConversation(friend.id);
+                                } catch {
+                                  // handled upstream
+                                }
+                              }}
+                              disabled={actionDisabled}
+                              className="flex w-full items-center gap-3 rounded-lg p-2 transition-colors hover:bg-gray-100"
+                            >
+                              <Avatar className="size-10">
+                                <AvatarFallback className="bg-blue-500 text-white">
+                                  {friend.username ? getInitials(friend.username) : '?'}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="flex-1 text-left">
+                                <p className="text-sm text-slate-900">{friend.username}</p>
+                                {friend.email && (
+                                  <p className="text-xs text-slate-500">{friend.email}</p>
+                                )}
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           )}
         </div>
@@ -374,31 +528,6 @@ export function ChatSidebar({
               </div>
             )}
 
-            <form onSubmit={handleInviteSubmit} className="space-y-2 rounded-lg border border-slate-200 bg-white px-4 py-4">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">Thêm bạn bằng email</h3>
-                <p className="text-xs text-slate-500">Nhập địa chỉ email chính xác để gửi lời mời.</p>
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  type="email"
-                  placeholder="vd: banbe@example.com"
-                  value={inviteEmail}
-                  onChange={(event) => setInviteEmail(event.target.value)}
-                  className="flex-1"
-                  disabled={friendActionPending}
-                />
-                <Button
-                  type="submit"
-                  className="rounded-full"
-                  disabled={friendActionPending || inviteEmail.trim().length === 0}
-                >
-                  {friendActionPending ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-                </Button>
-              </div>
-              {inviteError && <p className="text-xs text-red-500">{inviteError}</p>}
-            </form>
-
             {friendSearchQuery.trim().length > 0 && (
               <div>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -567,6 +696,200 @@ export function ChatSidebar({
           </div>
         )}
       </div>
+
+      {createGroupOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={closeGroupModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-group-title"
+            className="relative flex h-[800px] w-[600px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
+              <h2 id="create-group-title" className="text-left text-[18px] font-semibold text-slate-900">
+                Tạo nhóm
+              </h2>
+              <button
+                type="button"
+                onClick={closeGroupModal}
+                className="rounded-full p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="size-4" />
+                <span className="sr-only">Đóng</span>
+              </button>
+            </div>
+
+            <div className="px-6 pb-4 pt-3">
+              <div className="flex items-center gap-3">
+                <Avatar className="size-8">
+                  <AvatarFallback className="bg-blue-500 text-white">G</AvatarFallback>
+                </Avatar>
+                <Input
+                  type="text"
+                  value={groupName}
+                  onChange={(event) => setGroupName(event.target.value)}
+                  placeholder="Nhập tên nhóm"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus-visible:ring-1 focus-visible:ring-blue-500"
+                />
+              </div>
+              <div className="mt-4">
+                <Input
+                  type="text"
+                  value={groupSearchQuery}
+                  onChange={(event) => setGroupSearchQuery(event.target.value)}
+                  placeholder="Nhập tên người dùng"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus-visible:ring-1 focus-visible:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-hidden px-6">
+              <div className="pb-2">
+                <h3 className="text-sm font-medium text-slate-700">Trò chuyện gần đây</h3>
+              </div>
+              <div className="space-y-2">
+                {recentConversationPreviews.length === 0 ? (
+                  <p className="text-sm text-slate-500">Chưa có cuộc trò chuyện phù hợp.</p>
+                ) : (
+                  recentConversationPreviews.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left text-sm transition hover:border-blue-200 hover:bg-blue-50"
+                    >
+                      <span className="truncate font-medium text-slate-900">
+                        {conversation.title}
+                      </span>
+                      {conversation.updatedAt && (
+                        <span className="text-xs text-slate-400">
+                          {formatTimestamp(conversation.updatedAt)}
+                        </span>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-6 flex-1 overflow-hidden">
+                <h3 className="mb-3 text-sm font-medium text-slate-700">Danh bạ</h3>
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="text-slate-500">Đã chọn {selectedGroupCount} thành viên</span>
+                <span
+                  className={`font-medium ${
+                    selectedGroupCount < 2 ? 'text-red-500' : 'text-green-600'
+                  }`}
+                >
+                  {selectedGroupCount < 2 ? 'Chọn ít nhất 2 thành viên' : 'Đủ điều kiện'}
+                </span>
+              </div>
+                <ScrollArea className="h-full">
+                  <div className="space-y-4 pb-4">
+                    {groupedFriendEntries.length === 0 ? (
+                      <p className="text-sm text-slate-500">
+                        {friends.length === 0
+                          ? 'Bạn chưa có bạn bè trong danh sách.'
+                          : 'Không tìm thấy bạn bè phù hợp với tìm kiếm.'}
+                      </p>
+                    ) : (
+                      groupedFriendEntries.map(([letter, items]) => (
+                        <div key={letter} className="space-y-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            {letter}
+                          </p>
+                          <div className="space-y-2">
+                          {items.map((friend) => {
+                            const isSelected = selectedGroupMemberIds.includes(friend.id);
+                            return (
+                              <button
+                                key={friend.id}
+                                type="button"
+                                onClick={() => {
+                                  if (creatingGroup) return;
+                                  toggleGroupMember(friend.id);
+                                }}
+                                disabled={creatingGroup}
+                                className={`group flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition ${
+                                  isSelected
+                                    ? 'border-blue-500 bg-blue-50 shadow-sm'
+                                    : 'border-slate-200 hover:border-blue-200 hover:bg-blue-50'
+                                } ${creatingGroup ? 'cursor-not-allowed opacity-60' : ''}`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <Avatar className="size-8">
+                                    <AvatarFallback className="bg-blue-500 text-sm font-semibold text-white">
+                                      {friend.username ? getInitials(friend.username) : '?'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="flex-1">
+                                    <p className="text-sm font-medium text-slate-900">
+                                      {friend.username}
+                                    </p>
+                                    {friend.email && (
+                                      <p className="text-xs text-slate-500">{friend.email}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                <span
+                                  className={`flex size-5 items-center justify-center rounded-full border transition ${
+                                    isSelected
+                                      ? 'border-blue-500 bg-blue-500 text-white'
+                                      : 'border-slate-300 text-slate-400 opacity-0 group-hover:opacity-100'
+                                  }`}
+                                >
+                                  <Check className="size-3" />
+                                </span>
+                              </button>
+                            );
+                          })}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </ScrollArea>
+              </div>
+            </div>
+
+          {groupCreateError && (
+            <div className="px-6 pt-2">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+                {groupCreateError}
+              </div>
+            </div>
+          )}
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-6 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeGroupModal}
+                className="min-w-24"
+              >
+                Huỷ
+              </Button>
+              <Button
+                type="button"
+                className="min-w-28"
+                onClick={handleCreateGroup}
+                disabled={!canSubmitGroup}
+              >
+                {creatingGroup ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="size-4 animate-spin" />
+                    Đang tạo...
+                  </span>
+                ) : (
+                  'Tạo nhóm'
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

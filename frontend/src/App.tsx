@@ -661,6 +661,42 @@ function Chat() {
     [token, user?.id, updateConversations, fetchMessages],
   );
 
+  const createGroupConversation = useCallback(
+    async ({ name, memberIds }: { name: string; memberIds: string[] }) => {
+      if (!token) {
+        return;
+      }
+      setFriendActionPending(true);
+      setFriendFeedback(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/conversations/group`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ name: name.trim(), memberIds }),
+        });
+        const data: (ConversationResponse & { error?: string }) = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error ?? 'Không thể tạo nhóm');
+        }
+        const preview = mapConversationResponse(data, user?.id);
+        updateConversations((prev) => sortConversations([...prev, preview]));
+        setSelectedConversationId(preview.id);
+        setFriendFeedback({
+          type: 'success',
+          message: 'Đã tạo nhóm trò chuyện mới',
+        });
+        await fetchMessages({ conversationId: preview.id });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Không thể tạo nhóm';
+        setFriendFeedback({ type: 'error', message });
+        throw new Error(message);
+      } finally {
+        setFriendActionPending(false);
+      }
+    },
+    [token, user?.id, updateConversations, fetchMessages],
+  );
+
   const handleIncomingMessage = useCallback(
     (message: Message) => {
       // Handle messages with or without conversationId
@@ -969,6 +1005,7 @@ function Chat() {
           onClearFriendFeedback={clearFriendFeedback}
           friendActionPending={friendActionPending}
           friendSearchError={friendSearchError}
+          onCreateGroupConversation={createGroupConversation}
         />
       </div>
     </div>

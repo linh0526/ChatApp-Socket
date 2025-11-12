@@ -49,6 +49,7 @@ export interface ChatLayoutProps {
   onClearFriendFeedback: () => void;
   friendActionPending: boolean;
   friendSearchError?: string | null;
+  onCreateGroupConversation: (input: { name: string; memberIds: string[] }) => Promise<void>;
 }
 
 export function ChatLayout({
@@ -79,6 +80,7 @@ export function ChatLayout({
   friendActionPending,
   friendSearchError,
   messagesError,
+  onCreateGroupConversation,
 }: ChatLayoutProps) {
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId),
@@ -106,6 +108,7 @@ export function ChatLayout({
         onClearFriendFeedback={onClearFriendFeedback}
         friendActionPending={friendActionPending}
         friendSearchError={friendSearchError}
+        onCreateGroup={onCreateGroupConversation}
       />
       <ChatInterface
         conversation={activeConversation}
