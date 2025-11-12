@@ -15,7 +15,7 @@ const emitNewMessage = (message) => {
   }
 };
 
-const createMessageDocument = async ({ sender, content, conversationId }) => {
+const createMessageDocument = async ({ senderId, sender, content, conversationId }) => {
   if (!sender || !content) {
     const error = new Error('sender and content are required');
     error.statusCode = 400;
@@ -28,6 +28,17 @@ const createMessageDocument = async ({ sender, content, conversationId }) => {
     if (!conversation) {
       const error = new Error('Conversation not found');
       error.statusCode = 404;
+      throw error;
+    }
+
+    if (
+      senderId &&
+      !conversation.participants.some(
+        (participant) => participant?.toString?.() === senderId
+      )
+    ) {
+      const error = new Error('Bạn không có quyền trong cuộc trò chuyện này');
+      error.statusCode = 403;
       throw error;
     }
   }
@@ -51,7 +62,21 @@ const createMessageDocument = async ({ sender, content, conversationId }) => {
 const getMessages = async (req, res) => {
   try {
     const { conversationId } = req.query || {};
-    const filter = conversationId ? { conversation: conversationId } : {};
+
+    if (conversationId) {
+      const conversation = await Conversation.findById(conversationId).select('participants');
+      if (!conversation) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+      const isParticipant = conversation.participants.some(
+        (participant) => participant?.toString?.() === req.user.id
+      );
+      if (!isParticipant) {
+        return res.status(403).json({ error: 'Không có quyền truy cập cuộc trò chuyện' });
+      }
+    }
+
+    const filter = conversationId ? { conversation: conversationId } : { conversation: null };
     const messages = await Message.find(filter).sort({ createdAt: 1 });
     res.json(messages);
   } catch (error) {
@@ -64,7 +89,9 @@ const createMessage = async (req, res) => {
   try {
     const { content, conversationId } = req.body || {};
     const sender = req.user?.username;
-    const message = await createMessageDocument({ sender, content, conversationId });
+    const senderId = req.user?.id;
+
+    const message = await createMessageDocument({ senderId, sender, content, conversationId });
     res.status(201).json(message);
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -83,9 +110,27 @@ const registerSocketHandlers = (socket) => {
         throw Object.assign(new Error('Authentication token is required'), { statusCode: 401 });
       }
 
-      jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
 
-      const filter = conversationId ? { conversation: conversationId } : {};
+      if (conversationId) {
+        const conversation = await Conversation.findById(conversationId).select('participants');
+        if (!conversation) {
+          const error = new Error('Conversation not found');
+          error.statusCode = 404;
+          throw error;
+        }
+        const isParticipant = conversation.participants.some(
+          (participant) => participant?.toString?.() === userId
+        );
+        if (!isParticipant) {
+          const error = new Error('Không có quyền truy cập cuộc trò chuyện');
+          error.statusCode = 403;
+          throw error;
+        }
+      }
+
+      const filter = conversationId ? { conversation: conversationId } : { conversation: null };
       const messages = await Message.find(filter).sort({ createdAt: 1 }).lean();
 
       const serialized = messages.map((message) => ({
@@ -124,7 +169,8 @@ const registerSocketHandlers = (socket) => {
       const { token, content, conversationId } = payload ?? {};
       const decoded = jwt.verify(token, JWT_SECRET);
       const sender = decoded.username;
-      const message = await createMessageDocument({ sender, content, conversationId });
+      const senderId = decoded.id;
+      const message = await createMessageDocument({ senderId, sender, content, conversationId });
       if (typeof callback === 'function') {
         callback({ status: 'ok', data: message });
       }

@@ -10,6 +10,8 @@ const { registerSocketHandlers, setSocketIO } = require('./controllers/messageCo
 const messageRoutes = require('./routes/messageRoutes');
 const authRoutes = require('./routes/authRoutes');
 const conversationRoutes = require('./routes/conversationRoutes');
+const friendRoutes = require('./routes/friendRoutes');
+const userRoutes = require('./routes/userRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,6 +27,8 @@ app.get('/', (req, res) => {
 app.use('/api/messages', messageRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/conversations', conversationRoutes);
+app.use('/api/friends', friendRoutes);
+app.use('/api/users', userRoutes);
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/chatapp';

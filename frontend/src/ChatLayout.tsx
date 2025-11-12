@@ -3,6 +3,12 @@ import { useMemo } from 'react';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatInterface } from './ChatInterface';
 import type { ChatMessage } from './chatTypes';
+import type {
+  FriendActionFeedback,
+  FriendRequestPreview,
+  FriendRequestTarget,
+  FriendSummary,
+} from './friendTypes';
 
 export interface ConversationPreview {
   id: string;
@@ -21,13 +27,28 @@ export interface ChatLayoutProps {
   onSelectConversation: (id: string) => void;
   messages: ChatMessage[];
   loading: boolean;
-  error: string | null;
+  messagesError?: string | null;
   onRetry?: () => void;
   inputValue: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
   sending: boolean;
   currentUserName?: string | null;
+  friends: FriendSummary[];
+  incomingRequests: FriendRequestPreview[];
+  outgoingRequests: FriendRequestPreview[];
+  onStartConversationWithFriend: (friendId: string) => Promise<void>;
+  onSendFriendRequest: (target: FriendRequestTarget) => Promise<void>;
+  onAcceptFriendRequest: (requestId: string) => Promise<void>;
+  onDeclineFriendRequest: (requestId: string) => Promise<void>;
+  onCancelFriendRequest: (requestId: string) => Promise<void>;
+  searchResults: FriendSummary[];
+  onSearchUsers: (query: string) => Promise<void>;
+  searchingUsers: boolean;
+  friendFeedback: FriendActionFeedback | null;
+  onClearFriendFeedback: () => void;
+  friendActionPending: boolean;
+  friendSearchError?: string | null;
 }
 
 export function ChatLayout({
@@ -36,13 +57,28 @@ export function ChatLayout({
   onSelectConversation,
   messages,
   loading,
-  error,
   onRetry,
   inputValue,
   onInputChange,
   onSend,
   sending,
   currentUserName,
+  friends,
+  incomingRequests,
+  outgoingRequests,
+  onStartConversationWithFriend,
+  onSendFriendRequest,
+  onAcceptFriendRequest,
+  onDeclineFriendRequest,
+  onCancelFriendRequest,
+  searchResults,
+  onSearchUsers,
+  searchingUsers,
+  friendFeedback,
+  onClearFriendFeedback,
+  friendActionPending,
+  friendSearchError,
+  messagesError,
 }: ChatLayoutProps) {
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId),
@@ -55,17 +91,33 @@ export function ChatLayout({
         conversations={conversations}
         selectedConversationId={selectedConversationId ?? null}
         onSelectConversation={onSelectConversation}
+        friends={friends}
+        incomingRequests={incomingRequests}
+        outgoingRequests={outgoingRequests}
+        onStartConversation={onStartConversationWithFriend}
+        onSendFriendRequest={onSendFriendRequest}
+        onAcceptFriendRequest={onAcceptFriendRequest}
+        onDeclineFriendRequest={onDeclineFriendRequest}
+        onCancelFriendRequest={onCancelFriendRequest}
+        searchResults={searchResults}
+        onSearch={onSearchUsers}
+        searching={searchingUsers}
+        friendFeedback={friendFeedback}
+        onClearFriendFeedback={onClearFriendFeedback}
+        friendActionPending={friendActionPending}
+        friendSearchError={friendSearchError}
       />
       <ChatInterface
         conversation={activeConversation}
+        selectedConversationId={selectedConversationId}
         messages={messages}
+        messagesError={messagesError}
         currentUserName={currentUserName}
         inputValue={inputValue}
         onInputChange={onInputChange}
         onSend={onSend}
         sending={sending}
         loading={loading}
-        error={error}
         onRetry={onRetry}
       />
     </div>
