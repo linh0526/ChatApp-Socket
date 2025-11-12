@@ -33,7 +33,8 @@ type Message = {
 };
 
 type ConversationParticipantResponse = {
-  id: string;
+  id?: string;
+  _id?: string;
   username: string;
   email: string;
 };
@@ -85,10 +86,19 @@ const mapConversationResponse = (
   conversation: ConversationResponse,
   currentUserId?: string | null,
 ): ConversationPreview => {
-  const participants = conversation.participants ?? [];
+  const participants = (conversation.participants ?? []).map((participant) => {
+    const rawId = participant.id ?? participant._id;
+    const normalizedId = typeof rawId === 'string' ? rawId : '';
+    return {
+      id: normalizedId,
+      username: participant.username,
+      email: participant.email,
+    };
+  });
+
   const otherParticipant =
     !conversation.isGroup && currentUserId
-      ? participants.find((participant) => participant.id !== currentUserId)
+      ? participants.find((participant) => participant.id && participant.id !== currentUserId)
       : undefined;
 
   const title =
@@ -96,7 +106,7 @@ const mapConversationResponse = (
     (conversation.isGroup ? 'Nhóm chưa đặt tên' : otherParticipant?.username ?? 'Cuộc trò chuyện');
 
   const subtitle = conversation.isGroup
-    ? `${participants.length} thành viên`
+    ? `${(conversation.participants ?? []).length} thành viên`
     : otherParticipant?.email
       ? `Email: ${otherParticipant.email}`
       : 'Trò chuyện trực tiếp';
@@ -924,11 +934,14 @@ function Chat() {
       setFriendActionPending(true);
       setFriendFeedback(null);
       try {
-        const response = await fetch(`${API_BASE_URL}/api/conversations/direct`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ friendId }),
-        });
+      const response = await fetch(`${API_BASE_URL}/api/conversations/direct`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders(),
+        },
+        body: JSON.stringify({ friendId, includeSelf: false }),
+      });
         const data: ConversationResponse & { error?: string } = await response.json();
         if (!response.ok) {
           throw new Error(data?.error ?? 'Không thể mở cuộc trò chuyện');
