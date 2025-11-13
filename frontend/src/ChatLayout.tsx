@@ -184,6 +184,7 @@ export function ChatLayout({
             voiceRecordingReady={voiceRecordingReady}
             isMobile
             onOpenSidebar={() => setMobileSidebarOpen(true)}
+            onVideoCall={onVideoCall}
           />
         </>
       ) : (
@@ -207,6 +208,7 @@ export function ChatLayout({
             onVoiceMessageSend={onVoiceMessageSend}
             onVoiceMessageCancel={onVoiceMessageCancel}
             voiceRecordingReady={voiceRecordingReady}
+            onVideoCall={onVideoCall}
           />
         </>
       )}

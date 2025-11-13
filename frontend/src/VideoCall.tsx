@@ -232,8 +232,49 @@ export function VideoCall({
     if (socket) {
       // Listen for incoming offer (when receiving a call)
       const handleIncomingOffer = async (data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
-        if (data.conversationId === conversationId && peerConnectionRef.current && !peerConnectionRef.current.localDescription) {
+        if (data.conversationId === conversationId && !peerConnectionRef.current?.localDescription) {
           try {
+            // Create peer connection if it doesn't exist
+            if (!peerConnectionRef.current) {
+              const configuration = {
+                iceServers: [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+                ],
+              };
+              const pc = new RTCPeerConnection(configuration);
+              peerConnectionRef.current = pc;
+
+              // Handle remote stream
+              pc.ontrack = (event) => {
+                if (remoteVideoRef.current) {
+                  remoteVideoRef.current.srcObject = event.streams[0];
+                  setIsCallActive(true);
+                  setCallStatus('active');
+                }
+              };
+
+              // Handle ICE candidates
+              pc.onicecandidate = (event) => {
+                if (event.candidate && socket) {
+                  const token = localStorage.getItem('token');
+                  socket.emit('video-call:ice-candidate', {
+                    token,
+                    conversationId,
+                    candidate: event.candidate,
+                  });
+                }
+              };
+
+              // Handle connection state
+              pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                  setCallStatus('ended');
+                  setIsCallActive(false);
+                }
+              };
+            }
+
             // Request media permission if not already granted
             if (!localStreamRef.current) {
               const stream = await navigator.mediaDevices.getUserMedia({
@@ -264,6 +305,7 @@ export function VideoCall({
                 answer,
               });
             }
+            setCallStatus('active');
           } catch (error) {
             console.error('Error handling incoming offer:', error);
             alert('Không thể chấp nhận cuộc gọi. Vui lòng kiểm tra quyền camera và microphone.');

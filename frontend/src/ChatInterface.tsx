@@ -28,6 +28,7 @@ interface ChatInterfaceProps {
   voiceRecordingReady?: boolean;
   isMobile?: boolean;
   onOpenSidebar?: () => void;
+  onVideoCall?: () => void;
 }
 
 const getInitials = (text: string) =>
@@ -59,6 +60,7 @@ export function ChatInterface({
   voiceRecordingReady,
   isMobile,
   onOpenSidebar,
+  onVideoCall,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
@@ -393,9 +395,16 @@ export function ChatInterface({
                 <Button variant="ghost" size="icon" className="rounded-full">
                   <Phone className="size-5 text-blue-500" />
                 </Button>
-                <Button variant="ghost" size="icon" className="rounded-full">
-                  <Video className="size-5 text-blue-500" />
-                </Button>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="rounded-full"
+                onClick={onVideoCall}
+                title="Gọi video"
+                aria-label="Gọi video"
+              >
+                <Video className="size-5 text-blue-500" />
+              </Button>
                 <Button variant="ghost" size="icon" className="rounded-full">
                   <Info className="size-5 text-blue-500" />
                 </Button>
