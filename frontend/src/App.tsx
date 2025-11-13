@@ -56,7 +56,12 @@ const sortMessagesAsc = (items: Message[]) =>
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '';
-const SOCKET_URL = API_BASE_URL || window.location.origin.replace(/\/$/, '');
+// For production (Vercel): Use VITE_BACKEND_URL directly (no proxy)
+// For local development: Use window.location.origin (proxy via vite.config.ts)
+const SOCKET_URL = 
+  (import.meta.env.VITE_BACKEND_URL as string | undefined)?.replace(/\/$/, '') ||
+  API_BASE_URL ||
+  window.location.origin.replace(/\/$/, '');
 
 const getInitials = (text: string) =>
   text
@@ -1051,9 +1056,17 @@ function Chat() {
   }, [selectedConversationId]);
 
   const handleStartVideoCall = useCallback(() => {
-    if (!selectedConversationId) return;
+    console.log('[App] 📞 Starting video call');
+    if (!selectedConversationId) {
+      console.log('[App] ❌ No conversation selected');
+      return;
+    }
     const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) return;
+    if (!conversation) {
+      console.log('[App] ❌ Conversation not found');
+      return;
+    }
+    console.log('[App] 🎬 Opening VideoCall component for conversation:', selectedConversationId);
     setIsVideoCallOpen(true);
   }, [selectedConversationId, conversations]);
 
@@ -1128,6 +1141,12 @@ function Chat() {
 
   useEffect(() => {
     if (!token) return;
+    console.log('[App] 🔌 Connecting to socket:', SOCKET_URL);
+    console.log('[App] Environment:', {
+      VITE_BACKEND_URL: import.meta.env.VITE_BACKEND_URL,
+      VITE_API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
+      isProduction: import.meta.env.PROD,
+    });
     const socket = io(SOCKET_URL, { transports: ['websocket'], withCredentials: true });
     socketRef.current = socket;
 
@@ -1140,12 +1159,14 @@ function Chat() {
 
     // Handle incoming video call offer
     const handleIncomingVideoCallOffer = (data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
-      console.log('Received incoming video call offer:', data);
+      console.log('[App] 📞 Received incoming video call offer:', data);
       // Auto-select the conversation if not already selected
       if (data.conversationId && data.conversationId !== selectedConversationId) {
+        console.log('[App] 🔄 Auto-selecting conversation:', data.conversationId);
         setSelectedConversationId(data.conversationId);
       }
       // Open video call component
+      console.log('[App] 🎬 Opening VideoCall component');
       setIsVideoCallOpen(true);
     };
 

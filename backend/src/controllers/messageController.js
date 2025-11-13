@@ -323,6 +323,7 @@ const registerSocketHandlers = (socket) => {
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.id;
       const username = decoded.username;
+      console.log('[Backend] User:', username, 'Conversation:', conversationId);
 
       // Verify conversation access
       if (conversationId) {
@@ -337,55 +338,73 @@ const registerSocketHandlers = (socket) => {
 
       // Store socket info
       socketUsers.set(socket.id, { userId, username, conversationId });
+      console.log('[Backend] Stored socket info for user:', username);
 
       // Forward offer to other participants in the conversation
       if (conversationId && ioInstance) {
         const conversation = await Conversation.findById(conversationId).select('participants');
         if (conversation) {
+          let forwarded = false;
           conversation.participants.forEach((participantId) => {
             if (participantId.toString() !== userId) {
               // Find sockets for this participant
               ioInstance.sockets.sockets.forEach((otherSocket) => {
                 const otherUser = socketUsers.get(otherSocket.id);
                 if (otherUser && otherUser.userId === participantId.toString()) {
+                  console.log('[Backend] 📤 Forwarding offer to user:', otherUser.username);
                   otherSocket.emit('video-call:offer', { conversationId, offer, from: username });
+                  forwarded = true;
                 }
               });
             }
           });
+          if (!forwarded) {
+            console.log('[Backend] ⚠️ No online participants found to forward offer');
+          }
         }
       }
     } catch (error) {
-      console.error('Error handling video-call:offer:', error);
+      console.error('[Backend] ❌ Error handling video-call:offer:', error);
     }
   });
 
   socket.on('video-call:answer', async (payload) => {
     try {
+      console.log('[Backend] 📨 Received video-call:answer');
       const { token, conversationId, answer } = payload ?? {};
-      if (!token) return;
+      if (!token) {
+        console.log('[Backend] ❌ No token provided');
+        return;
+      }
       
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.id;
+      console.log('[Backend] Answer from user:', userId, 'Conversation:', conversationId);
 
       // Forward answer to the caller
       if (conversationId && ioInstance) {
         const conversation = await Conversation.findById(conversationId).select('participants');
         if (conversation) {
+          let forwarded = false;
           conversation.participants.forEach((participantId) => {
             if (participantId.toString() !== userId) {
               ioInstance.sockets.sockets.forEach((otherSocket) => {
                 const otherUser = socketUsers.get(otherSocket.id);
                 if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
+                  console.log('[Backend] 📤 Forwarding answer to user:', otherUser.username);
                   otherSocket.emit('video-call:answer', { conversationId, answer });
+                  forwarded = true;
                 }
               });
             }
           });
+          if (!forwarded) {
+            console.log('[Backend] ⚠️ No caller found to forward answer');
+          }
         }
       }
     } catch (error) {
-      console.error('Error handling video-call:answer:', error);
+      console.error('[Backend] ❌ Error handling video-call:answer:', error);
     }
   });
 
@@ -414,39 +433,51 @@ const registerSocketHandlers = (socket) => {
         }
       }
     } catch (error) {
-      console.error('Error handling video-call:ice-candidate:', error);
+      console.error('[Backend] ❌ Error handling video-call:ice-candidate:', error);
     }
   });
 
   socket.on('video-call:end', async (payload) => {
     try {
+      console.log('[Backend] 📞 Received video-call:end');
       const { token, conversationId } = payload ?? {};
-      if (!token) return;
+      if (!token) {
+        console.log('[Backend] ❌ No token provided');
+        return;
+      }
       
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.id;
+      console.log('[Backend] Call ended by user:', userId, 'Conversation:', conversationId);
 
       // Notify other participants
       if (conversationId && ioInstance) {
         const conversation = await Conversation.findById(conversationId).select('participants');
         if (conversation) {
+          let notified = false;
           conversation.participants.forEach((participantId) => {
             if (participantId.toString() !== userId) {
               ioInstance.sockets.sockets.forEach((otherSocket) => {
                 const otherUser = socketUsers.get(otherSocket.id);
                 if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
+                  console.log('[Backend] 📤 Notifying user:', otherUser.username, 'that call ended');
                   otherSocket.emit('video-call:ended', { conversationId });
+                  notified = true;
                 }
               });
             }
           });
+          if (!notified) {
+            console.log('[Backend] ⚠️ No online participants to notify');
+          }
         }
       }
 
       // Clean up
       socketUsers.delete(socket.id);
+      console.log('[Backend] ✅ Call ended and cleaned up');
     } catch (error) {
-      console.error('Error handling video-call:end:', error);
+      console.error('[Backend] ❌ Error handling video-call:end:', error);
     }
   });
 

@@ -55,9 +55,11 @@ export function VideoCall({
 
     const initializeCall = async () => {
       try {
-        console.log('Initializing call - requesting media permissions...');
-        console.log('isOpen:', isOpen);
-        console.log('navigator.mediaDevices:', navigator.mediaDevices);
+        console.log('[VideoCall] ===== INITIALIZING CALL =====');
+        console.log('[VideoCall] isOpen:', isOpen);
+        console.log('[VideoCall] conversationId:', conversationId);
+        console.log('[VideoCall] pendingOfferRef:', pendingOfferRef.current);
+        console.log('[VideoCall] navigator.mediaDevices:', navigator.mediaDevices);
         
         // Check if mediaDevices is available
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -160,45 +162,59 @@ export function VideoCall({
 
         // Handle remote stream
         pc.ontrack = (event) => {
+          console.log('[VideoCall] 🎥 Received remote track:', event);
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = event.streams[0];
             setIsCallActive(true);
             setCallStatus('active');
+            console.log('[VideoCall] ✅ Remote stream set, call is active');
           }
         };
 
         // Handle ICE candidates
         pc.onicecandidate = (event) => {
           if (event.candidate && socket) {
+            console.log('[VideoCall] 🧊 ICE candidate generated:', event.candidate);
             const token = localStorage.getItem('token');
             socket.emit('video-call:ice-candidate', {
               token,
               conversationId,
               candidate: event.candidate,
             });
+          } else if (!event.candidate) {
+            console.log('[VideoCall] 🧊 ICE gathering complete');
           }
         };
 
         // Handle connection state
         pc.onconnectionstatechange = () => {
+          console.log('[VideoCall] 🔄 Connection state changed:', pc.connectionState);
           if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            console.log('[VideoCall] ❌ Connection lost, ending call');
             setCallStatus('ended');
             setIsCallActive(false);
+          } else if (pc.connectionState === 'connected') {
+            console.log('[VideoCall] ✅ Connection established');
           }
         };
 
         // Check if there's a pending incoming offer
         if (pendingOfferRef.current && pendingOfferRef.current.conversationId === conversationId) {
           // This is an incoming call, handle the offer
+          console.log('[VideoCall] 📞 INCOMING CALL - Handling pending offer');
           const pendingOffer = pendingOfferRef.current;
           pendingOfferRef.current = null;
           
+          console.log('[VideoCall] Setting remote description (offer)');
           await pc.setRemoteDescription(new RTCSessionDescription(pendingOffer.offer));
+          console.log('[VideoCall] Creating answer');
           const answer = await pc.createAnswer();
+          console.log('[VideoCall] Setting local description (answer)');
           await pc.setLocalDescription(answer);
           
           if (socket) {
             const token = localStorage.getItem('token');
+            console.log('[VideoCall] 📤 Emitting video-call:answer');
             socket.emit('video-call:answer', {
               token,
               conversationId,
@@ -206,19 +222,24 @@ export function VideoCall({
             });
           }
           setCallStatus('active');
+          console.log('[VideoCall] ✅ Incoming call answered, status: active');
         } else {
           // This is an outgoing call, create offer
+          console.log('[VideoCall] 📞 OUTGOING CALL - Creating offer');
           const offer = await pc.createOffer();
+          console.log('[VideoCall] Setting local description (offer)');
           await pc.setLocalDescription(offer);
 
           if (socket) {
             const token = localStorage.getItem('token');
+            console.log('[VideoCall] 📤 Emitting video-call:offer');
             socket.emit('video-call:offer', {
               token,
               conversationId,
               offer,
             });
             setCallStatus('ringing');
+            console.log('[VideoCall] ✅ Offer sent, status: ringing');
           }
         }
       } catch (error) {
@@ -254,15 +275,18 @@ export function VideoCall({
     if (socket) {
       // Listen for incoming offer (when receiving a call)
       const handleIncomingOffer = async (data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
+        console.log('[VideoCall] 📨 Received incoming offer:', data);
         if (data.conversationId === conversationId) {
           // If component is not open or peer connection not ready, store the offer
           if (!isOpen || !peerConnectionRef.current) {
+            console.log('[VideoCall] ⏳ Storing offer (component not ready)');
             pendingOfferRef.current = data;
             return;
           }
           
           // If peer connection exists but no local description, handle the offer
           if (!peerConnectionRef.current.localDescription) {
+            console.log('[VideoCall] 📞 Handling incoming offer (component already open)');
             try {
               // Create peer connection if it doesn't exist (shouldn't happen but just in case)
               if (!peerConnectionRef.current) {
@@ -323,12 +347,16 @@ export function VideoCall({
                 });
               }
 
+              console.log('[VideoCall] Setting remote description (offer)');
               await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+              console.log('[VideoCall] Creating answer');
               const answer = await peerConnectionRef.current.createAnswer();
+              console.log('[VideoCall] Setting local description (answer)');
               await peerConnectionRef.current.setLocalDescription(answer);
               
               if (socket) {
                 const token = localStorage.getItem('token');
+                console.log('[VideoCall] 📤 Emitting video-call:answer');
                 socket.emit('video-call:answer', {
                   token,
                   conversationId,
@@ -336,6 +364,7 @@ export function VideoCall({
                 });
               }
               setCallStatus('active');
+              console.log('[VideoCall] ✅ Incoming call answered, status: active');
             } catch (error) {
               console.error('Error handling incoming offer:', error);
               alert('Không thể chấp nhận cuộc gọi. Vui lòng kiểm tra quyền camera và microphone.');
@@ -346,8 +375,11 @@ export function VideoCall({
 
       // Listen for answer
       const handleAnswer = async (data: { conversationId: string; answer: RTCSessionDescriptionInit }) => {
+        console.log('[VideoCall] 📨 Received answer:', data);
         if (data.conversationId === conversationId && peerConnectionRef.current) {
+          console.log('[VideoCall] Setting remote description (answer)');
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+          console.log('[VideoCall] ✅ Answer processed');
         }
       };
 
@@ -356,16 +388,20 @@ export function VideoCall({
         conversationId: string;
         candidate: RTCIceCandidateInit;
       }) => {
+        console.log('[VideoCall] 🧊 Received ICE candidate:', data);
         if (data.conversationId === conversationId && peerConnectionRef.current) {
           await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+          console.log('[VideoCall] ✅ ICE candidate added');
         }
       };
 
       // Listen for call ended
       const handleCallEnded = (data: { conversationId: string }) => {
+        console.log('[VideoCall] 📞 Call ended:', data);
         if (data.conversationId === conversationId) {
           setCallStatus('ended');
           setIsCallActive(false);
+          console.log('[VideoCall] ✅ Call ended, status: ended');
         }
       };
 
@@ -404,12 +440,15 @@ export function VideoCall({
   };
 
   const endCall = () => {
+    console.log('[VideoCall] 📞 Ending call');
     if (socket) {
       const token = localStorage.getItem('token');
+      console.log('[VideoCall] 📤 Emitting video-call:end');
       socket.emit('video-call:end', { token, conversationId });
     }
     cleanup();
     onClose();
+    console.log('[VideoCall] ✅ Call ended and cleaned up');
   };
 
   if (!isOpen) return null;
