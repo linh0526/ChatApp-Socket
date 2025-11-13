@@ -1,6 +1,7 @@
 export interface VoiceRecordingPayload {
-  url: string;
-  fileName: string;
+  dataUrl?: string;
+  url?: string;
+  fileName?: string;
   originalName?: string;
   mimeType?: string;
   size?: number;

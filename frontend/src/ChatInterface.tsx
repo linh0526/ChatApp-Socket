@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Info, Mic, Phone, Send, Square, Video } from 'lucide-react';
+import { Info, Menu, Mic, Phone, Send, Square, Video } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Avatar, AvatarFallback } from './ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { ScrollArea } from './ui/scroll-area';
 import type { ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
@@ -26,6 +26,8 @@ interface ChatInterfaceProps {
   onVoiceMessageSend?: () => void | Promise<void>;
   onVoiceMessageCancel?: () => void | Promise<void>;
   voiceRecordingReady?: boolean;
+  isMobile?: boolean;
+  onOpenSidebar?: () => void;
 }
 
 const getInitials = (text: string) =>
@@ -55,6 +57,8 @@ export function ChatInterface({
   onVoiceMessageSend,
   onVoiceMessageCancel,
   voiceRecordingReady,
+  isMobile = false,
+  onOpenSidebar,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
@@ -70,8 +74,21 @@ export function ChatInterface({
       subtitle: 'Đang tải thông tin...',
       avatarFallback: getInitials('Chat'),
       isGroup: false,
+      participants: [],
     };
   }, [conversation, selectedConversationId]);
+
+  const participantLookup = useMemo(() => {
+    const map = new Map<string, NonNullable<ConversationPreview['participants']>[number]>();
+    for (const participant of conversationDisplay?.participants ?? []) {
+      if (!participant?.username) continue;
+      map.set(participant.username.toLowerCase(), participant);
+      if (participant.email) {
+        map.set(participant.email.toLowerCase(), participant);
+      }
+    }
+    return map;
+  }, [conversationDisplay?.participants]);
 
   const isConversationSelected = Boolean(selectedConversationId);
 
@@ -253,6 +270,12 @@ export function ChatInterface({
     return (
       <div className="space-y-3">
         {messages.map((message) => {
+          const senderName = message.sender?.trim() || 'Người dùng';
+          const normalizedSender = senderName.toLowerCase();
+          const participant = normalizedSender ? participantLookup.get(normalizedSender) : undefined;
+          const displayName = participant?.username || senderName;
+          const avatarUrl = participant?.avatarUrl ?? null;
+          const avatarInitials = getInitials(displayName);
           const isCurrentUser =
             currentUserName && message.sender?.toLowerCase() === currentUserName.toLowerCase();
           const timestamp = new Date(message.createdAt);
@@ -264,19 +287,28 @@ export function ChatInterface({
               className={`flex gap-2 ${isCurrentUser ? 'flex-row-reverse' : 'flex-row'}`}
             >
               {!isCurrentUser && (
-                <Avatar className="size-7 flex-shrink-0">
+                <Avatar className="size-8 flex-shrink-0">
+                  {avatarUrl ? <AvatarImage src={avatarUrl} alt={displayName} /> : null}
                   <AvatarFallback className="bg-blue-500 text-xs font-semibold text-white">
-                    {conversationDisplay?.avatarFallback ??
-                      getInitials(conversationDisplay?.title ?? message.sender)}
+                    {avatarInitials || (conversationDisplay?.avatarFallback ?? 'U')}
                   </AvatarFallback>
                 </Avatar>
               )}
 
               <div
-                className={`flex max-w-[60%] flex-col ${
+                className={`flex max-w-[80%] flex-col ${
                   isCurrentUser ? 'items-end text-right' : 'items-start'
                 }`}
               >
+                {conversationDisplay?.isGroup && (
+                  <span
+                    className={`mb-1 text-xs font-semibold ${
+                      isCurrentUser ? 'self-end text-blue-200' : 'text-slate-600'
+                    }`}
+                  >
+                    {isCurrentUser ? 'Bạn' : displayName}
+                  </span>
+                )}
                 <div
                   className={`chat-bubble ${
                     isCurrentUser ? 'chat-bubble--outgoing' : 'chat-bubble--incoming'
@@ -284,11 +316,11 @@ export function ChatInterface({
                 >
                   {message.voiceRecording ? (
                     <div className="flex flex-col gap-2">
-                      {message.voiceRecording.url ? (
+                      {message.voiceRecording.dataUrl || message.voiceRecording.url ? (
                         <audio
                           controls
                           preload="metadata"
-                          src={message.voiceRecording.url}
+                          src={message.voiceRecording.dataUrl || message.voiceRecording.url}
                           className="w-60 max-w-full"
                         >
                           Trình duyệt của bạn không hỗ trợ phát tin nhắn thoại.
@@ -306,7 +338,7 @@ export function ChatInterface({
                       )}
                     </div>
                   ) : (
-                    <p className="whitespace-pre-line">{message.content}</p>
+                    <p className="whitespace-pre-line break-words">{message.content}</p>
                   )}
                   {hasError && (
                     <p className="mt-1 text-xs text-red-600">{message.error}</p>
@@ -326,8 +358,20 @@ export function ChatInterface({
   return (
     <div className="chat-interface">
       <div className="chat-interface__header">
-        {isConversationSelected ? (
-          <>
+        <div className="flex flex-1 items-center gap-3">
+          {isMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-full sm:hidden"
+              onClick={() => onOpenSidebar?.()}
+              title="Mở danh sách cuộc trò chuyện"
+              aria-label="Mở danh sách cuộc trò chuyện"
+            >
+              <Menu className="size-5 text-slate-600" />
+            </Button>
+          )}
+          {isConversationSelected ? (
             <div className="flex items-center gap-3">
               <Avatar className="size-12">
                 <AvatarFallback className="bg-blue-500 text-lg font-semibold text-white">
@@ -344,26 +388,26 @@ export function ChatInterface({
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" className="rounded-full">
-                <Phone className="size-5 text-blue-500" />
-              </Button>
-              <Button variant="ghost" size="icon" className="rounded-full">
-                <Video className="size-5 text-blue-500" />
-              </Button>
-              <Button variant="ghost" size="icon" className="rounded-full">
-                <Info className="size-5 text-blue-500" />
-              </Button>
-            </div>
-          </>
-        ) : (
-          <div className="flex w-full items-center justify-between">
+          ) : (
             <div>
               <h3 className="text-base font-semibold text-slate-900">Chưa chọn cuộc trò chuyện</h3>
               <p className="text-sm text-slate-500">
                 Hãy chọn một cuộc trò chuyện từ danh sách để xem tin nhắn.
               </p>
             </div>
+          )}
+        </div>
+        {isConversationSelected && (
+          <div className="hidden items-center gap-2 sm:flex">
+            <Button variant="ghost" size="icon" className="rounded-full">
+              <Phone className="size-5 text-blue-500" />
+            </Button>
+            <Button variant="ghost" size="icon" className="rounded-full">
+              <Video className="size-5 text-blue-500" />
+            </Button>
+            <Button variant="ghost" size="icon" className="rounded-full">
+              <Info className="size-5 text-blue-500" />
+            </Button>
           </div>
         )}
       </div>
@@ -375,7 +419,7 @@ export function ChatInterface({
       </ScrollArea>
 
       <div className="chat-interface__composer">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
+        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-3 sm:flex-nowrap">
           {voiceComposerState === 'idle' && (
             <>
               <Input
@@ -385,7 +429,7 @@ export function ChatInterface({
                 onChange={(event) => onInputChange(event.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={sending || !isConversationSelected}
-                className="flex-1 rounded-full bg-white"
+                className="flex-1 min-w-0 rounded-full bg-white"
               />
               <Button
                 onClick={handleVoiceMessageStart}

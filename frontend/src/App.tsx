@@ -14,8 +14,9 @@ import type {
 } from './friendTypes';
 
 type VoiceRecording = {
-  url: string;
-  fileName: string;
+  dataUrl?: string;
+  url?: string;
+  fileName?: string;
   originalName?: string;
   mimeType?: string;
   size?: number;
@@ -124,6 +125,7 @@ const mapConversationResponse = (
     isGroup: conversation.isGroup,
     updatedAt,
     unreadCount: 0,
+    participants,
   };
 };
 
@@ -170,6 +172,10 @@ function Chat() {
       const voice = message.voiceRecording;
       if (!voice) {
         return { ...message, voiceRecording: voice ?? undefined };
+      }
+
+      if (voice.dataUrl) {
+        return { ...message, voiceRecording: { ...voice } };
       }
 
       if (!voice.url) {
