@@ -26,6 +26,7 @@ export function VideoCall({
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isCallActive, setIsCallActive] = useState(false);
   const [callStatus, setCallStatus] = useState<'connecting' | 'ringing' | 'active' | 'ended'>('connecting');
+  const pendingOfferRef = useRef<{ conversationId: string; offer: RTCSessionDescriptionInit; from?: string } | null>(null);
 
   const cleanup = () => {
     if (localStreamRef.current) {
@@ -186,18 +187,39 @@ export function VideoCall({
           }
         };
 
-        // Create offer
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        // Check if there's a pending incoming offer
+        if (pendingOfferRef.current && pendingOfferRef.current.conversationId === conversationId) {
+          // This is an incoming call, handle the offer
+          const pendingOffer = pendingOfferRef.current;
+          pendingOfferRef.current = null;
+          
+          await pc.setRemoteDescription(new RTCSessionDescription(pendingOffer.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          
+          if (socket) {
+            const token = localStorage.getItem('token');
+            socket.emit('video-call:answer', {
+              token,
+              conversationId,
+              answer,
+            });
+          }
+          setCallStatus('active');
+        } else {
+          // This is an outgoing call, create offer
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
 
-        if (socket) {
-          const token = localStorage.getItem('token');
-          socket.emit('video-call:offer', {
-            token,
-            conversationId,
-            offer,
-          });
-          setCallStatus('ringing');
+          if (socket) {
+            const token = localStorage.getItem('token');
+            socket.emit('video-call:offer', {
+              token,
+              conversationId,
+              offer,
+            });
+            setCallStatus('ringing');
+          }
         }
       } catch (error) {
         console.error('Error initializing call:', error);
@@ -232,83 +254,92 @@ export function VideoCall({
     if (socket) {
       // Listen for incoming offer (when receiving a call)
       const handleIncomingOffer = async (data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
-        if (data.conversationId === conversationId && !peerConnectionRef.current?.localDescription) {
-          try {
-            // Create peer connection if it doesn't exist
-            if (!peerConnectionRef.current) {
-              const configuration = {
-                iceServers: [
-                  { urls: 'stun:stun.l.google.com:19302' },
-                  { urls: 'stun:stun1.l.google.com:19302' },
-                ],
-              };
-              const pc = new RTCPeerConnection(configuration);
-              peerConnectionRef.current = pc;
+        if (data.conversationId === conversationId) {
+          // If component is not open or peer connection not ready, store the offer
+          if (!isOpen || !peerConnectionRef.current) {
+            pendingOfferRef.current = data;
+            return;
+          }
+          
+          // If peer connection exists but no local description, handle the offer
+          if (!peerConnectionRef.current.localDescription) {
+            try {
+              // Create peer connection if it doesn't exist (shouldn't happen but just in case)
+              if (!peerConnectionRef.current) {
+                const configuration = {
+                  iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                  ],
+                };
+                const pc = new RTCPeerConnection(configuration);
+                peerConnectionRef.current = pc;
 
-              // Handle remote stream
-              pc.ontrack = (event) => {
-                if (remoteVideoRef.current) {
-                  remoteVideoRef.current.srcObject = event.streams[0];
-                  setIsCallActive(true);
-                  setCallStatus('active');
-                }
-              };
+                // Handle remote stream
+                pc.ontrack = (event) => {
+                  if (remoteVideoRef.current) {
+                    remoteVideoRef.current.srcObject = event.streams[0];
+                    setIsCallActive(true);
+                    setCallStatus('active');
+                  }
+                };
 
-              // Handle ICE candidates
-              pc.onicecandidate = (event) => {
-                if (event.candidate && socket) {
-                  const token = localStorage.getItem('token');
-                  socket.emit('video-call:ice-candidate', {
-                    token,
-                    conversationId,
-                    candidate: event.candidate,
-                  });
-                }
-              };
+                // Handle ICE candidates
+                pc.onicecandidate = (event) => {
+                  if (event.candidate && socket) {
+                    const token = localStorage.getItem('token');
+                    socket.emit('video-call:ice-candidate', {
+                      token,
+                      conversationId,
+                      candidate: event.candidate,
+                    });
+                  }
+                };
 
-              // Handle connection state
-              pc.onconnectionstatechange = () => {
-                if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                  setCallStatus('ended');
-                  setIsCallActive(false);
-                }
-              };
-            }
-
-            // Request media permission if not already granted
-            if (!localStreamRef.current) {
-              const stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true,
-              });
-              localStreamRef.current = stream;
-              if (localVideoRef.current) {
-                localVideoRef.current.srcObject = stream;
+                // Handle connection state
+                pc.onconnectionstatechange = () => {
+                  if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                    setCallStatus('ended');
+                    setIsCallActive(false);
+                  }
+                };
               }
-              // Add tracks to peer connection
-              stream.getTracks().forEach((track) => {
-                if (peerConnectionRef.current) {
-                  peerConnectionRef.current.addTrack(track, stream);
-                }
-              });
-            }
 
-            await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await peerConnectionRef.current.createAnswer();
-            await peerConnectionRef.current.setLocalDescription(answer);
-            
-            if (socket) {
-              const token = localStorage.getItem('token');
-              socket.emit('video-call:answer', {
-                token,
-                conversationId,
-                answer,
-              });
+              // Request media permission if not already granted
+              if (!localStreamRef.current) {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                  video: true,
+                  audio: true,
+                });
+                localStreamRef.current = stream;
+                if (localVideoRef.current) {
+                  localVideoRef.current.srcObject = stream;
+                }
+                // Add tracks to peer connection
+                stream.getTracks().forEach((track) => {
+                  if (peerConnectionRef.current) {
+                    peerConnectionRef.current.addTrack(track, stream);
+                  }
+                });
+              }
+
+              await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+              const answer = await peerConnectionRef.current.createAnswer();
+              await peerConnectionRef.current.setLocalDescription(answer);
+              
+              if (socket) {
+                const token = localStorage.getItem('token');
+                socket.emit('video-call:answer', {
+                  token,
+                  conversationId,
+                  answer,
+                });
+              }
+              setCallStatus('active');
+            } catch (error) {
+              console.error('Error handling incoming offer:', error);
+              alert('Không thể chấp nhận cuộc gọi. Vui lòng kiểm tra quyền camera và microphone.');
             }
-            setCallStatus('active');
-          } catch (error) {
-            console.error('Error handling incoming offer:', error);
-            alert('Không thể chấp nhận cuộc gọi. Vui lòng kiểm tra quyền camera và microphone.');
           }
         }
       };

@@ -1138,8 +1138,20 @@ function Chat() {
       }
     };
 
+    // Handle incoming video call offer
+    const handleIncomingVideoCallOffer = (data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
+      console.log('Received incoming video call offer:', data);
+      // Auto-select the conversation if not already selected
+      if (data.conversationId && data.conversationId !== selectedConversationId) {
+        setSelectedConversationId(data.conversationId);
+      }
+      // Open video call component
+      setIsVideoCallOpen(true);
+    };
+
     socket.on('message:new', handleIncomingMessage);
     socket.on('connect', handleConnected);
+    socket.on('video-call:offer', handleIncomingVideoCallOffer);
 
     if (socket.connected) {
       void handleConnected();
@@ -1148,6 +1160,7 @@ function Chat() {
     return () => {
       socket.off('message:new', handleIncomingMessage);
       socket.off('connect', handleConnected);
+      socket.off('video-call:offer', handleIncomingVideoCallOffer);
       socket.disconnect();
       socketRef.current = null;
     };

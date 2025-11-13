@@ -11,7 +11,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/socket.io': {
-        target: process.env.VITE_PROXY_TARGET ?? 'http://localhost:5001',
+        target:'http://localhost:5001',
         ws: true,
       },
       '/uploads': {
