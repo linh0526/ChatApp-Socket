@@ -4,7 +4,7 @@ const ALGORITHM = 'aes-256-gcm';
 const FALLBACK_SECRET = 'dev_message_encryption_key_change_me';
 
 const getKey = () => {
-  const secret = process.env.ENCRYPTION_KEY || process.env.MESSAGE_ENCRYPTION_KEY || FALLBACK_SECRET;
+  const secret = process.env.MESSAGE_ENCRYPTION_KEY || FALLBACK_SECRET;
   return crypto.createHash('sha256').update(String(secret), 'utf8').digest();
 };
 
