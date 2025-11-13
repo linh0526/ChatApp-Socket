@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import { ChatLayout, type ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
+import { VideoCall } from './VideoCall';
 import type {
   FriendActionFeedback,
   FriendRequestPreview,
@@ -154,6 +155,7 @@ function Chat() {
   const voiceMessageBlobRef = useRef<Blob | null>(null);
   const [voiceMessagePending, setVoiceMessagePending] = useState(false);
   const [voiceRecordingReady, setVoiceRecordingReady] = useState(false);
+  const [isVideoCallOpen, setIsVideoCallOpen] = useState(false);
 
   const assetBaseUrl = useMemo(() => {
     if (API_BASE_URL) {
@@ -1042,6 +1044,24 @@ function Chat() {
     setPendingMessages(new Map());
   }, [selectedConversationId]);
 
+  const handleStartVideoCall = useCallback(() => {
+    if (!selectedConversationId) return;
+    const conversation = conversations.find((c) => c.id === selectedConversationId);
+    if (!conversation) return;
+    setIsVideoCallOpen(true);
+  }, [selectedConversationId, conversations]);
+
+  const handleCloseVideoCall = useCallback(() => {
+    setIsVideoCallOpen(false);
+  }, []);
+
+  const getOtherUserName = useCallback(() => {
+    if (!selectedConversationId) return '';
+    const conversation = conversations.find((c) => c.id === selectedConversationId);
+    if (!conversation) return '';
+    return conversation.title || 'Người dùng';
+  }, [selectedConversationId, conversations]);
+
   useEffect(() => {
     if (!selectedConversationId) return;
     updateConversations((prev) =>
@@ -1290,8 +1310,18 @@ function Chat() {
         onVoiceMessageSend={sendVoiceMessage}
           onVoiceMessageCancel={cancelVoiceMessage}
           voiceRecordingReady={voiceRecordingReady}
+          onVideoCall={handleStartVideoCall}
         />
       </div>
+      {isVideoCallOpen && selectedConversationId && (
+        <VideoCall
+          isOpen={isVideoCallOpen}
+          onClose={handleCloseVideoCall}
+          conversationId={selectedConversationId}
+          otherUserName={getOtherUserName()}
+          socket={socketRef.current}
+        />
+      )}
     </div>
   );
 }

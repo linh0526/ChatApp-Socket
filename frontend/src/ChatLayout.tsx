@@ -56,6 +56,7 @@ export interface ChatLayoutProps {
   onVoiceMessageSend?: () => void | Promise<void>;
   onVoiceMessageCancel?: () => void | Promise<void>;
   voiceRecordingReady?: boolean;
+  onVideoCall?: () => void;
 }
 
 export function ChatLayout({
@@ -93,6 +94,7 @@ export function ChatLayout({
   onVoiceMessageSend,
   onVoiceMessageCancel,
   voiceRecordingReady,
+  onVideoCall,
 }: ChatLayoutProps) {
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId),
@@ -140,6 +142,7 @@ export function ChatLayout({
         onVoiceMessageSend={onVoiceMessageSend}
         onVoiceMessageCancel={onVoiceMessageCancel}
         voiceRecordingReady={voiceRecordingReady}
+        onVideoCall={onVideoCall}
       />
     </div>
   );

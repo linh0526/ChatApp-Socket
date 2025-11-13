@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
 let ioInstance = null;
+const socketUsers = new Map(); // Map socket.id -> { userId, username, conversationId }
 
 const setSocketIO = (io) => {
   ioInstance = io;
@@ -278,6 +279,146 @@ const registerSocketHandlers = (socket) => {
         console.error('Error handling socket message:', error);
       }
     }
+  });
+
+  // Video call handlers
+  socket.on('video-call:offer', async (payload) => {
+    try {
+      const { token, conversationId, offer } = payload ?? {};
+      if (!token) return;
+      
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
+      const username = decoded.username;
+
+      // Verify conversation access
+      if (conversationId) {
+        const conversation = await Conversation.findById(conversationId).select('participants');
+        if (!conversation) return;
+        
+        const isParticipant = conversation.participants.some(
+          (participant) => participant?.toString?.() === userId
+        );
+        if (!isParticipant) return;
+      }
+
+      // Store socket info
+      socketUsers.set(socket.id, { userId, username, conversationId });
+
+      // Forward offer to other participants in the conversation
+      if (conversationId && ioInstance) {
+        const conversation = await Conversation.findById(conversationId).select('participants');
+        if (conversation) {
+          conversation.participants.forEach((participantId) => {
+            if (participantId.toString() !== userId) {
+              // Find sockets for this participant
+              ioInstance.sockets.sockets.forEach((otherSocket) => {
+                const otherUser = socketUsers.get(otherSocket.id);
+                if (otherUser && otherUser.userId === participantId.toString()) {
+                  otherSocket.emit('video-call:offer', { conversationId, offer, from: username });
+                }
+              });
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error handling video-call:offer:', error);
+    }
+  });
+
+  socket.on('video-call:answer', async (payload) => {
+    try {
+      const { token, conversationId, answer } = payload ?? {};
+      if (!token) return;
+      
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
+
+      // Forward answer to the caller
+      if (conversationId && ioInstance) {
+        const conversation = await Conversation.findById(conversationId).select('participants');
+        if (conversation) {
+          conversation.participants.forEach((participantId) => {
+            if (participantId.toString() !== userId) {
+              ioInstance.sockets.sockets.forEach((otherSocket) => {
+                const otherUser = socketUsers.get(otherSocket.id);
+                if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
+                  otherSocket.emit('video-call:answer', { conversationId, answer });
+                }
+              });
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error handling video-call:answer:', error);
+    }
+  });
+
+  socket.on('video-call:ice-candidate', async (payload) => {
+    try {
+      const { token, conversationId, candidate } = payload ?? {};
+      if (!token) return;
+      
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
+
+      // Forward ICE candidate to other participants
+      if (conversationId && ioInstance) {
+        const conversation = await Conversation.findById(conversationId).select('participants');
+        if (conversation) {
+          conversation.participants.forEach((participantId) => {
+            if (participantId.toString() !== userId) {
+              ioInstance.sockets.sockets.forEach((otherSocket) => {
+                const otherUser = socketUsers.get(otherSocket.id);
+                if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
+                  otherSocket.emit('video-call:ice-candidate', { conversationId, candidate });
+                }
+              });
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error handling video-call:ice-candidate:', error);
+    }
+  });
+
+  socket.on('video-call:end', async (payload) => {
+    try {
+      const { token, conversationId } = payload ?? {};
+      if (!token) return;
+      
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
+
+      // Notify other participants
+      if (conversationId && ioInstance) {
+        const conversation = await Conversation.findById(conversationId).select('participants');
+        if (conversation) {
+          conversation.participants.forEach((participantId) => {
+            if (participantId.toString() !== userId) {
+              ioInstance.sockets.sockets.forEach((otherSocket) => {
+                const otherUser = socketUsers.get(otherSocket.id);
+                if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
+                  otherSocket.emit('video-call:ended', { conversationId });
+                }
+              });
+            }
+          });
+        }
+      }
+
+      // Clean up
+      socketUsers.delete(socket.id);
+    } catch (error) {
+      console.error('Error handling video-call:end:', error);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    socketUsers.delete(socket.id);
   });
 };
 
