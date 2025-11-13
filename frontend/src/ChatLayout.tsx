@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { ChatSidebar } from './ChatSidebar';
 import { ChatInterface } from './ChatInterface';
@@ -9,6 +9,8 @@ import type {
   FriendRequestTarget,
   FriendSummary,
 } from './friendTypes';
+import { Sheet, SheetContent } from './ui/sheet';
+import { useIsMobile } from './ui/legacy/use-mobile';
 
 export interface ConversationPreview {
   id: string;
@@ -19,6 +21,12 @@ export interface ConversationPreview {
   unreadCount?: number;
   avatarFallback?: string;
   isGroup?: boolean;
+  participants?: Array<{
+    id: string;
+    username: string;
+    email?: string;
+    avatarUrl?: string | null;
+  }>;
 }
 
 export interface ChatLayoutProps {
@@ -96,54 +104,112 @@ export function ChatLayout({
   voiceRecordingReady,
   onVideoCall,
 }: ChatLayoutProps) {
+  const isMobile = useIsMobile();
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isMobile) {
+      setMobileSidebarOpen(false);
+      return;
+    }
+    if (!selectedConversationId && conversations.length > 0) {
+      setMobileSidebarOpen(true);
+    }
+  }, [isMobile, selectedConversationId, conversations.length]);
+
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId),
     [conversations, selectedConversationId],
   );
 
+  const handleSelectConversation = (id: string) => {
+    onSelectConversation(id);
+    if (isMobile) {
+      setMobileSidebarOpen(false);
+    }
+  };
+
+  const sidebar = (
+    <ChatSidebar
+      conversations={conversations}
+      selectedConversationId={selectedConversationId ?? null}
+      onSelectConversation={handleSelectConversation}
+      friends={friends}
+      incomingRequests={incomingRequests}
+      outgoingRequests={outgoingRequests}
+      onStartConversation={onStartConversationWithFriend}
+      onSendFriendRequest={onSendFriendRequest}
+      onAcceptFriendRequest={onAcceptFriendRequest}
+      onDeclineFriendRequest={onDeclineFriendRequest}
+      onCancelFriendRequest={onCancelFriendRequest}
+      searchResults={searchResults}
+      onSearch={onSearchUsers}
+      searching={searchingUsers}
+      friendFeedback={friendFeedback}
+      onClearFriendFeedback={onClearFriendFeedback}
+      friendActionPending={friendActionPending}
+      friendSearchError={friendSearchError}
+      onCreateGroup={onCreateGroupConversation}
+    />
+  );
+
   return (
     <div className="chat-app">
-      <ChatSidebar
-        conversations={conversations}
-        selectedConversationId={selectedConversationId ?? null}
-        onSelectConversation={onSelectConversation}
-        friends={friends}
-        incomingRequests={incomingRequests}
-        outgoingRequests={outgoingRequests}
-        onStartConversation={onStartConversationWithFriend}
-        onSendFriendRequest={onSendFriendRequest}
-        onAcceptFriendRequest={onAcceptFriendRequest}
-        onDeclineFriendRequest={onDeclineFriendRequest}
-        onCancelFriendRequest={onCancelFriendRequest}
-        searchResults={searchResults}
-        onSearch={onSearchUsers}
-        searching={searchingUsers}
-        friendFeedback={friendFeedback}
-        onClearFriendFeedback={onClearFriendFeedback}
-        friendActionPending={friendActionPending}
-        friendSearchError={friendSearchError}
-        onCreateGroup={onCreateGroupConversation}
-      />
-      <ChatInterface
-        conversation={activeConversation}
-        selectedConversationId={selectedConversationId}
-        messages={messages}
-        messagesError={messagesError}
-        currentUserName={currentUserName}
-        inputValue={inputValue}
-        onInputChange={onInputChange}
-        onSend={onSend}
-        sending={sending}
-        loading={loading}
-        onRetry={onRetry}
-        onVoiceMessage={onVoiceMessage}
-        voiceMessagePending={voiceMessagePending}
-        onVoiceMessageStop={onVoiceMessageStop}
-        onVoiceMessageSend={onVoiceMessageSend}
-        onVoiceMessageCancel={onVoiceMessageCancel}
-        voiceRecordingReady={voiceRecordingReady}
-        onVideoCall={onVideoCall}
-      />
+      {isMobile ? (
+        <>
+          <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+            <SheetContent side="left" className="p-0 w-full max-w-full border-none sm:max-w-sm sm:border-r">
+              <div className="flex h-full w-full overflow-hidden">
+                {sidebar}
+              </div>
+            </SheetContent>
+          </Sheet>
+          <ChatInterface
+            conversation={activeConversation}
+            selectedConversationId={selectedConversationId}
+            messages={messages}
+            messagesError={messagesError}
+            currentUserName={currentUserName}
+            inputValue={inputValue}
+            onInputChange={onInputChange}
+            onSend={onSend}
+            sending={sending}
+            loading={loading}
+            onRetry={onRetry}
+            onVoiceMessage={onVoiceMessage}
+            voiceMessagePending={voiceMessagePending}
+            onVoiceMessageStop={onVoiceMessageStop}
+            onVoiceMessageSend={onVoiceMessageSend}
+            onVoiceMessageCancel={onVoiceMessageCancel}
+            voiceRecordingReady={voiceRecordingReady}
+            isMobile
+            onOpenSidebar={() => setMobileSidebarOpen(true)}
+          />
+        </>
+      ) : (
+        <>
+          {sidebar}
+          <ChatInterface
+            conversation={activeConversation}
+            selectedConversationId={selectedConversationId}
+            messages={messages}
+            messagesError={messagesError}
+            currentUserName={currentUserName}
+            inputValue={inputValue}
+            onInputChange={onInputChange}
+            onSend={onSend}
+            sending={sending}
+            loading={loading}
+            onRetry={onRetry}
+            onVoiceMessage={onVoiceMessage}
+            voiceMessagePending={voiceMessagePending}
+            onVoiceMessageStop={onVoiceMessageStop}
+            onVoiceMessageSend={onVoiceMessageSend}
+            onVoiceMessageCancel={onVoiceMessageCancel}
+            voiceRecordingReady={voiceRecordingReady}
+          />
+        </>
+      )}
     </div>
   );
 }

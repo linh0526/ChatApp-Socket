@@ -30,7 +30,7 @@ body {
 }
 
 .chat-sidebar {
-  @apply flex h-full min-h-0 w-[360px] shrink-0 flex-col border-r border-slate-200 bg-white;
+  @apply flex h-full min-h-0 w-full shrink-0 flex-col border-b border-slate-200 bg-white sm:w-[360px] sm:border-b-0 sm:border-r;
 }
 
 .chat-sidebar__header {
@@ -46,7 +46,7 @@ body {
 }
 
 .chat-sidebar__list {
-  @apply flex-1 overflow-y-auto;
+  @apply flex-1 min-h-0 overflow-y-auto;
 }
 
 .chat-interface {
@@ -75,29 +75,4 @@ body {
 
 .chat-bubble--incoming {
   @apply bg-white text-slate-900;
-}
-
-@media (max-aspect-ratio: 3/4) {
-  .chat-app {
-    @apply flex-col;
-  }
-
-  .chat-sidebar {
-    @apply w-full border-r-0 border-b border-slate-200;
-    height: auto;
-    max-height: 45vh;
-    overflow: hidden;
-  }
-
-  .chat-sidebar__list {
-    flex: 1 1 auto;
-    overflow-y: auto;
-    max-height: none;
-  }
-
-  .chat-interface {
-    @apply border-t border-slate-200;
-    min-height: 55vh;
-  }
-
 }

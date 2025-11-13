@@ -24,13 +24,11 @@ const messageSchema = new mongoose.Schema(
       default: 'text',
     },
     voiceRecording: {
-      fileName: { type: String },
-      originalName: { type: String },
+      data: { type: Buffer },
       mimeType: { type: String },
       size: { type: Number },
-      storagePath: { type: String },
-      relativePath: { type: String },
-      url: { type: String },
+      originalName: { type: String },
+      durationMs: { type: Number },
     },
   },
   { timestamps: true }

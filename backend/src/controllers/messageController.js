@@ -1,8 +1,6 @@
-const fsPromises = require('fs/promises');
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
 const { encryptText, decryptText } = require('../utils/encryption');
-const { storeVoiceRecording } = require('../utils/storage');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
@@ -25,8 +23,41 @@ const sanitizeVoiceRecording = (voiceRecording) => {
   if (!voiceRecording) {
     return undefined;
   }
-  const { storagePath, ...rest } = voiceRecording;
-  return rest;
+
+  const source = typeof voiceRecording.toObject === 'function' ? voiceRecording.toObject() : voiceRecording;
+
+  // Backward compatibility: older records stored URL-based metadata
+  if (source.url) {
+    return {
+      url: source.url,
+      mimeType: source.mimeType || 'audio/webm',
+      originalName: source.originalName,
+      size: source.size,
+    };
+  }
+
+  const { data, mimeType, size, originalName } = source;
+
+  let buffer = null;
+  if (Buffer.isBuffer(data)) {
+    buffer = data;
+  } else if (data && typeof data === 'object' && Array.isArray(data.data)) {
+    buffer = Buffer.from(data.data);
+  }
+
+  if (!buffer || buffer.length === 0) {
+    return undefined;
+  }
+
+  const resolvedMime = mimeType || 'audio/webm';
+  const base64 = buffer.toString('base64');
+
+  return {
+    dataUrl: `data:${resolvedMime};base64,${base64}`,
+    mimeType: resolvedMime,
+    originalName: originalName || 'voice-message.webm',
+    size: size ?? buffer.length,
+  };
 };
 
 const createMessageDocument = async ({
@@ -102,7 +133,9 @@ const createMessageDocument = async ({
 
   const plainMessage = message.toObject();
   plainMessage.content = trimmedContent;
-  plainMessage.voiceRecording = sanitizeVoiceRecording(plainMessage.voiceRecording);
+  const sanitizedVoiceRecording = sanitizeVoiceRecording(plainMessage.voiceRecording);
+  plainMessage.voiceRecording =
+    sanitizedVoiceRecording ?? sanitizeVoiceRecording(voiceRecording) ?? undefined;
 
   emitNewMessage(plainMessage);
   return plainMessage;
@@ -442,35 +475,23 @@ const createVoiceMessage = async (req, res) => {
       ? originalNameHeader[0]
       : originalNameHeader;
 
-    let storedRecording = null;
-    try {
-      storedRecording = await storeVoiceRecording({
-        buffer: req.body,
-        mimeType: contentType,
-        originalName,
-        userId: senderId,
-      });
-    } catch (storageError) {
-      console.error('Failed to store voice recording:', storageError);
-      return res.status(500).json({ error: 'Không thể lưu trữ ghi âm' });
-    }
+    const audioBuffer = Buffer.from(req.body);
+    const storedRecording = {
+      data: audioBuffer,
+      mimeType: contentType === 'application/octet-stream' ? 'audio/webm' : contentType,
+      size: audioBuffer.length,
+      originalName: originalName || `voice-message-${Date.now()}.webm`,
+    };
 
-    try {
-      const message = await createMessageDocument({
-        senderId,
-        sender,
-        content: VOICE_PLACEHOLDER_CONTENT,
-        conversationId,
-        messageType: 'voice',
-        voiceRecording: storedRecording,
-      });
-      res.status(201).json(message);
-    } catch (error) {
-      if (storedRecording?.storagePath) {
-        await fsPromises.unlink(storedRecording.storagePath).catch(() => {});
-      }
-      throw error;
-    }
+    const message = await createMessageDocument({
+      senderId,
+      sender,
+      content: VOICE_PLACEHOLDER_CONTENT,
+      conversationId,
+      messageType: 'voice',
+      voiceRecording: storedRecording,
+    });
+    res.status(201).json(message);
   } catch (error) {
     const statusCode = error.statusCode || 500;
     if (statusCode >= 500) {
