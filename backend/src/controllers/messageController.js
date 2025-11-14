@@ -18,6 +18,7 @@ const emitNewMessage = (message) => {
 };
 
 const VOICE_PLACEHOLDER_CONTENT = 'Tin nhắn thoại';
+const IMAGE_PLACEHOLDER_CONTENT = 'Hình ảnh';
 
 const sanitizeVoiceRecording = (voiceRecording) => {
   if (!voiceRecording) {
@@ -60,6 +61,47 @@ const sanitizeVoiceRecording = (voiceRecording) => {
   };
 };
 
+const sanitizeImage = (image) => {
+  if (!image) {
+    return undefined;
+  }
+
+  const source = typeof image.toObject === 'function' ? image.toObject() : image;
+
+  // Backward compatibility: older records stored URL-based metadata
+  if (source.url) {
+    return {
+      url: source.url,
+      mimeType: source.mimeType || 'image/jpeg',
+      originalName: source.originalName,
+      size: source.size,
+    };
+  }
+
+  const { data, mimeType, size, originalName } = source;
+
+  let buffer = null;
+  if (Buffer.isBuffer(data)) {
+    buffer = data;
+  } else if (data && typeof data === 'object' && Array.isArray(data.data)) {
+    buffer = Buffer.from(data.data);
+  }
+
+  if (!buffer || buffer.length === 0) {
+    return undefined;
+  }
+
+  const resolvedMime = mimeType || 'image/jpeg';
+  const base64 = buffer.toString('base64');
+
+  return {
+    dataUrl: `data:${resolvedMime};base64,${base64}`,
+    mimeType: resolvedMime,
+    originalName: originalName || 'image.jpg',
+    size: size ?? buffer.length,
+  };
+};
+
 const createMessageDocument = async ({
   senderId,
   sender,
@@ -67,6 +109,7 @@ const createMessageDocument = async ({
   conversationId,
   messageType = 'text',
   voiceRecording,
+  image,
 }) => {
   if (!sender) {
     const error = new Error('sender is required');
@@ -74,7 +117,7 @@ const createMessageDocument = async ({
     throw error;
   }
 
-  const normalizedType = messageType === 'voice' ? 'voice' : 'text';
+  const normalizedType = messageType === 'voice' ? 'voice' : messageType === 'image' ? 'image' : 'text';
   const trimmedSender = sender.trim();
   let trimmedContent = typeof content === 'string' ? content.trim() : '';
 
@@ -92,6 +135,15 @@ const createMessageDocument = async ({
     }
     if (!trimmedContent) {
       trimmedContent = VOICE_PLACEHOLDER_CONTENT;
+    }
+  } else if (normalizedType === 'image') {
+    if (!image) {
+      const error = new Error('image metadata is required');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!trimmedContent) {
+      trimmedContent = IMAGE_PLACEHOLDER_CONTENT;
     }
   }
 
@@ -123,6 +175,7 @@ const createMessageDocument = async ({
     content: encryptedContent,
     messageType: normalizedType,
     voiceRecording: normalizedType === 'voice' ? voiceRecording : undefined,
+    image: normalizedType === 'image' ? image : undefined,
     conversation: conversation ? conversation._id : undefined,
   });
 
@@ -136,6 +189,8 @@ const createMessageDocument = async ({
   const sanitizedVoiceRecording = sanitizeVoiceRecording(plainMessage.voiceRecording);
   plainMessage.voiceRecording =
     sanitizedVoiceRecording ?? sanitizeVoiceRecording(voiceRecording) ?? undefined;
+  const sanitizedImage = sanitizeImage(plainMessage.image);
+  plainMessage.image = sanitizedImage ?? sanitizeImage(image) ?? undefined;
 
   emitNewMessage(plainMessage);
   return plainMessage;
@@ -169,6 +224,7 @@ const getMessages = async (req, res) => {
         plain.content = '';
       }
       plain.voiceRecording = sanitizeVoiceRecording(plain.voiceRecording);
+      plain.image = sanitizeImage(plain.image);
       return plain;
     });
 
@@ -245,6 +301,7 @@ const registerSocketHandlers = (socket) => {
           ...message,
           content: decryptedContent,
           voiceRecording: sanitizeVoiceRecording(message.voiceRecording),
+          image: sanitizeImage(message.image),
           _id: message._id?.toString?.() ?? message._id,
           conversation: message.conversation?.toString?.(),
           createdAt:
@@ -532,10 +589,88 @@ const createVoiceMessage = async (req, res) => {
   }
 };
 
+const createImageMessage = async (req, res) => {
+  try {
+    const { conversationId } = req.query || {};
+    const sender = req.user?.username;
+    const senderId = req.user?.id;
+
+    console.log('[createImageMessage] Request received:', {
+      conversationId,
+      sender,
+      contentType: req.headers['content-type'],
+      bodySize: req.body?.length || 0,
+      isBuffer: Buffer.isBuffer(req.body),
+    });
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      console.error('[createImageMessage] Invalid body:', {
+        isBuffer: Buffer.isBuffer(req.body),
+        length: req.body?.length || 0,
+      });
+      return res.status(400).json({ error: 'Dữ liệu hình ảnh không hợp lệ' });
+    }
+
+    // Get content type from header, handle multipart/form-data case
+    let contentType = req.headers['content-type'] || 'image/jpeg';
+    // If it's multipart, extract the actual image type from the boundary
+    if (contentType.includes('multipart')) {
+      // For raw body parser, we expect the actual image content
+      // Try to detect from file extension or default to jpeg
+      contentType = 'image/jpeg';
+    } else if (contentType.includes(';')) {
+      // Remove charset or boundary info
+      contentType = contentType.split(';')[0].trim();
+    }
+    
+    if (!contentType.startsWith('image/') && contentType !== 'application/octet-stream') {
+      console.log('Unsupported content type:', contentType);
+      return res.status(415).json({ error: `Định dạng hình ảnh không được hỗ trợ: ${contentType}` });
+    }
+
+    const originalNameHeader = req.headers['x-image-filename'];
+    const originalName = Array.isArray(originalNameHeader)
+      ? originalNameHeader[0]
+      : originalNameHeader;
+
+    const imageBuffer = Buffer.from(req.body);
+    const storedImage = {
+      data: imageBuffer,
+      mimeType: contentType === 'application/octet-stream' ? 'image/jpeg' : contentType,
+      size: imageBuffer.length,
+      originalName: originalName || `image-${Date.now()}.jpg`,
+    };
+
+    const message = await createMessageDocument({
+      senderId,
+      sender,
+      content: IMAGE_PLACEHOLDER_CONTENT,
+      conversationId,
+      messageType: 'image',
+      image: storedImage,
+    });
+    
+    console.log('[createImageMessage] Message created:', {
+      messageId: message._id,
+      hasImage: !!message.image,
+      imageSize: message.image?.size,
+    });
+    
+    res.status(201).json(message);
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    if (statusCode >= 500) {
+      console.error('Error creating image message:', error);
+    }
+    res.status(statusCode).json({ error: error.message || 'Failed to create image message' });
+  }
+};
+
 module.exports = {
   getMessages,
   createMessage,
   createVoiceMessage,
+  createImageMessage,
   registerSocketHandlers,
   setSocketIO,
 };

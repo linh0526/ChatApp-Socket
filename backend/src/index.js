@@ -25,11 +25,30 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Chat API is running' });
 });
 
+// Register all API routes
 app.use('/api/messages', messageRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/users', userRoutes);
+
+// Debug: Log registered routes after all routes are mounted
+setTimeout(() => {
+  console.log('\n=== Registered Routes ===');
+  const routes = [];
+  if (app._router && app._router.stack) {
+    app._router.stack.forEach((middleware) => {
+      if (middleware.route) {
+        const methods = Object.keys(middleware.route.methods).join(',').toUpperCase();
+        routes.push(`${methods} ${middleware.route.path}`);
+      } else if (middleware.name === 'router' && middleware.regexp) {
+        routes.push(`Router: ${middleware.regexp}`);
+      }
+    });
+  }
+  routes.forEach(route => console.log(route));
+  console.log('========================\n');
+}, 100);
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/chatapp';
