@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
-import { Info, Menu, Mic, Phone, Send, Square, Video } from 'lucide-react';
+import type { KeyboardEvent, ChangeEvent } from 'react';
+import { Info, Menu, Mic, Phone, Send, Square, Video, Image as ImageIcon } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
@@ -29,6 +29,7 @@ interface ChatInterfaceProps {
   isMobile?: boolean;
   onOpenSidebar?: () => void;
   onVideoCall?: () => void;
+  onSendImage?: (file: File) => void | Promise<void>;
 }
 
 const getInitials = (text: string) =>
@@ -61,6 +62,7 @@ export function ChatInterface({
   isMobile,
   onOpenSidebar,
   onVideoCall,
+  onSendImage,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
@@ -232,6 +234,31 @@ export function ChatInterface({
     }
   };
 
+  const handleImageSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      window.alert('Vui lòng chọn một file hình ảnh hợp lệ.');
+      return;
+    }
+
+    // Validate file size (max 10MB)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      window.alert('Kích thước file quá lớn. Vui lòng chọn file nhỏ hơn 10MB.');
+      return;
+    }
+
+    if (onSendImage) {
+      onSendImage(file);
+    }
+
+    // Reset input
+    event.target.value = '';
+  };
+
   const renderBody = () => {
     if (!isConversationSelected) {
       return (
@@ -339,6 +366,42 @@ export function ChatInterface({
                         <p className="text-xs text-slate-500">{message.content}</p>
                       )}
                     </div>
+                  ) : message.image ? (
+                    <div className="flex flex-col gap-2">
+                      {message.image.dataUrl || message.image.url ? (
+                        <img
+                          src={message.image.dataUrl || message.image.url}
+                          alt={message.image.originalName || 'Hình ảnh'}
+                          className="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+                          style={{ maxHeight: '400px', objectFit: 'contain' }}
+                          onError={(e) => {
+                            console.error('Image load error:', {
+                              src: message.image?.dataUrl || message.image?.url,
+                              image: message.image,
+                            });
+                            e.currentTarget.style.display = 'none';
+                          }}
+                          onLoad={() => {
+                            console.log('Image loaded successfully:', message.image?.originalName);
+                          }}
+                        />
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <p className="text-sm text-slate-500">Không thể hiển thị hình ảnh.</p>
+                          {message.image.originalName && (
+                            <p className="text-xs text-slate-400">File: {message.image.originalName}</p>
+                          )}
+                        </div>
+                      )}
+                      {message.image.originalName && (
+                        <p className="text-xs text-slate-500">
+                          {message.image.originalName}
+                        </p>
+                      )}
+                      {message.content && message.content !== 'Hình ảnh' && (
+                        <p className="text-xs text-slate-500">{message.content}</p>
+                      )}
+                    </div>
                   ) : (
                     <p className="whitespace-pre-line break-words">{message.content}</p>
                   )}
@@ -442,6 +505,26 @@ export function ChatInterface({
                 disabled={sending || !isConversationSelected}
                 className="flex-1 min-w-0 rounded-full bg-white"
               />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageSelect}
+                className="hidden"
+                id="image-upload-input"
+                disabled={!isConversationSelected}
+              />
+              <Button
+                onClick={() => document.getElementById('image-upload-input')?.click()}
+                size="icon"
+                className="rounded-full"
+                variant="outline"
+                disabled={!isConversationSelected}
+                title="Gửi hình ảnh"
+                aria-label="Gửi hình ảnh"
+                type="button"
+              >
+                <ImageIcon className="size-4" />
+              </Button>
               <Button
                 onClick={handleVoiceMessageStart}
                 size="icon"

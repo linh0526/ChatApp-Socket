@@ -7,6 +7,15 @@ export interface VoiceRecordingPayload {
   size?: number;
 }
 
+export interface ImagePayload {
+  dataUrl?: string;
+  url?: string;
+  fileName?: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+}
+
 export interface ChatMessage {
   id: string;
   sender: string;
@@ -14,7 +23,8 @@ export interface ChatMessage {
   createdAt: string;
   error?: string;
   isPending?: boolean;
-  messageType?: 'text' | 'voice';
+  messageType?: 'text' | 'voice' | 'image';
   voiceRecording?: VoiceRecordingPayload | null;
+  image?: ImagePayload | null;
 }
 

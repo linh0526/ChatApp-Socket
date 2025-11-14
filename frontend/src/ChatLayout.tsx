@@ -65,6 +65,7 @@ export interface ChatLayoutProps {
   onVoiceMessageCancel?: () => void | Promise<void>;
   voiceRecordingReady?: boolean;
   onVideoCall?: () => void;
+  onSendImage?: (file: File) => void | Promise<void>;
 }
 
 export function ChatLayout({
@@ -103,6 +104,7 @@ export function ChatLayout({
   onVoiceMessageCancel,
   voiceRecordingReady,
   onVideoCall,
+  onSendImage,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -185,6 +187,7 @@ export function ChatLayout({
             isMobile
             onOpenSidebar={() => setMobileSidebarOpen(true)}
             onVideoCall={onVideoCall}
+            onSendImage={onSendImage}
           />
         </>
       ) : (
@@ -209,6 +212,7 @@ export function ChatLayout({
             onVoiceMessageCancel={onVoiceMessageCancel}
             voiceRecordingReady={voiceRecordingReady}
             onVideoCall={onVideoCall}
+            onSendImage={onSendImage}
           />
         </>
       )}

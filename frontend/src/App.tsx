@@ -24,14 +24,25 @@ type VoiceRecording = {
   relativePath?: string;
 };
 
+type Image = {
+  dataUrl?: string;
+  url?: string;
+  fileName?: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+  relativePath?: string;
+};
+
 type Message = {
   _id: string;
   sender: string;
   content: string;
   createdAt: string;
   conversation?: string | null;
-  messageType?: 'text' | 'voice';
+  messageType?: 'text' | 'voice' | 'image';
   voiceRecording?: VoiceRecording | null;
+  image?: Image | null;
 };
 
 type ConversationParticipantResponse = {
@@ -198,6 +209,37 @@ function Chat() {
         ...message,
         voiceRecording: {
           ...voice,
+          url: resolvedUrl,
+        },
+      };
+    },
+    [assetBaseUrl],
+  );
+
+  const withImageUrl = useCallback(
+    (message: Message): Message => {
+      const image = message.image;
+      if (!image) {
+        return { ...message, image: image ?? undefined };
+      }
+
+      if (image.dataUrl) {
+        return { ...message, image: { ...image } };
+      }
+
+      if (!image.url) {
+        return { ...message, image: { ...image } };
+      }
+
+      const isAbsolute = /^https?:\/\//i.test(image.url);
+      const resolvedUrl = isAbsolute
+        ? image.url
+        : `${assetBaseUrl}${image.url.startsWith('/') ? '' : '/'}${image.url}`;
+
+      return {
+        ...message,
+        image: {
+          ...image,
           url: resolvedUrl,
         },
       };
@@ -794,7 +836,7 @@ function Chat() {
                   },
                 );
             });
-            const normalized = data.map(withVoiceUrl);
+            const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
             const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
             updateConversationFromMessages(targetConversationId, sorted);
@@ -812,7 +854,7 @@ function Chat() {
             });
             if (!response.ok) throw new Error('Không thể tải danh sách tin nhắn');
             const data: Message[] = await response.json();
-            const normalized = data.map(withVoiceUrl);
+            const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
             const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
             updateConversationFromMessages(targetConversationId, sorted);
@@ -829,7 +871,7 @@ function Chat() {
           });
           if (!response.ok) throw new Error('Không thể tải danh sách tin nhắn');
           const data: Message[] = await response.json();
-          const normalized = data.map(withVoiceUrl);
+          const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
           const sorted = sortMessagesAsc(normalized);
           setMessages(sorted);
           updateConversationFromMessages(targetConversationId, sorted);
@@ -849,12 +891,12 @@ function Chat() {
         }
       }
     },
-    [selectedConversationId, token, updateConversationFromMessages, withVoiceUrl],
+    [selectedConversationId, token, updateConversationFromMessages, withVoiceUrl, withImageUrl],
   );
 
   const handleIncomingMessage = useCallback(
     (message: Message) => {
-      const normalizedMessage = withVoiceUrl(message);
+      const normalizedMessage = withImageUrl(withVoiceUrl(message));
       const rawConversationId =
         typeof normalizedMessage.conversation === 'string'
           ? normalizedMessage.conversation.trim()
@@ -884,8 +926,69 @@ function Chat() {
         void fetchConversations();
       }
     },
-    [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage, withVoiceUrl],
+    [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage, withVoiceUrl, withImageUrl],
   );
+
+  const sendImageMessage = useCallback(async (file: File) => {
+    if (!selectedConversationId) {
+      window.alert('Vui lòng chọn một cuộc trò chuyện để gửi hình ảnh.');
+      return;
+    }
+    if (!token) {
+      window.alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      return;
+    }
+
+    try {
+      const fileName = file.name || `image-${Date.now()}.jpg`;
+      const endpoint = `${API_BASE_URL}/api/messages/image?conversationId=${encodeURIComponent(
+        selectedConversationId,
+      )}`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'X-Image-Filename': fileName,
+        },
+        body: file,
+      });
+
+      // Check if response is JSON before parsing
+      const contentType = response.headers.get('content-type');
+      let payload: Message & { error?: string };
+      
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        }
+        throw new Error('Server trả về lỗi không hợp lệ. Vui lòng thử lại.');
+      }
+
+      try {
+        payload = (await response.json()) as Message & { error?: string };
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        const text = await response.text();
+        console.error('Response text:', text.substring(0, 200));
+        throw new Error('Không thể đọc phản hồi từ server.');
+      }
+
+      if (!response.ok) {
+        const errorMessage = payload?.error ?? `Gửi hình ảnh thất bại (${response.status})`;
+        throw new Error(errorMessage);
+      }
+
+      const normalized = withImageUrl(withVoiceUrl(payload));
+      handleIncomingMessage(normalized);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gửi hình ảnh thất bại';
+      console.error('sendImageMessage error:', error);
+      window.alert(message);
+    }
+  }, [handleIncomingMessage, selectedConversationId, token, withImageUrl, withVoiceUrl]);
 
   const sendVoiceMessage = useCallback(async () => {
     const blob = voiceMessageBlobRef.current;
@@ -925,7 +1028,7 @@ function Chat() {
         throw new Error(errorMessage);
       }
 
-      const normalized = withVoiceUrl(payload);
+      const normalized = withImageUrl(withVoiceUrl(payload));
       handleIncomingMessage(normalized);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Gửi tin nhắn thoại thất bại';
@@ -1026,6 +1129,7 @@ function Chat() {
       createdAt: message.createdAt,
       messageType: message.messageType ?? 'text',
       voiceRecording: message.voiceRecording ?? undefined,
+      image: message.image ?? undefined,
     }));
 
     // Add pending messages with errors
@@ -1351,6 +1455,7 @@ function Chat() {
           onVoiceMessageCancel={cancelVoiceMessage}
           voiceRecordingReady={voiceRecordingReady}
           onVideoCall={handleStartVideoCall}
+          onSendImage={sendImageMessage}
         />
       </div>
       {isVideoCallOpen && selectedConversationId && (
