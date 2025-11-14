@@ -38,7 +38,7 @@ export function VideoCall({
   const [callStatus, setCallStatus] = useState<'connecting' | 'ringing' | 'active' | 'ended'>('connecting');
   const [callDuration, setCallDuration] = useState(0); // in seconds
   const callStartTimeRef = useRef<number | null>(null);
-  const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const durationIntervalRef = useRef<number | null>(null);
 
   // Timer functions
   const startCallTimer = () => {
