@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
+  ChevronDown,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
   Search,
   SquarePen,
+  Moon,
+  Sun,
   X,
   UserCheck,
   UserPlus,
@@ -48,6 +51,7 @@ interface ChatSidebarProps {
 
 type FilterType = 'all' | 'unread' | 'groups';
 type Section = 'conversations' | 'friends' | 'requests';
+const THEME_STORAGE_KEY = 'chatapp-theme-preference';
 
 const formatTimestamp = (value?: string) => {
   if (!value) return '';
@@ -103,6 +107,8 @@ export function ChatSidebar({
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
   const [groupCreateError, setGroupCreateError] = useState<string | null>(null);
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [optionsExpanded, setOptionsExpanded] = useState(false);
 
   useEffect(() => {
     if (!createGroupOpen) {
@@ -119,6 +125,31 @@ export function ChatSidebar({
       prev.filter((id) => friends.some((friend) => friend.id === id)),
     );
   }, [friends]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return;
+    }
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+    const initialDark = storedTheme === 'dark' || (storedTheme === null && prefersDark);
+    setIsDarkMode(initialDark);
+    document.documentElement.classList.toggle('dark', initialDark);
+  }, []);
+
+  const applyThemePreference = (dark: boolean) => {
+    setIsDarkMode(dark);
+    if (typeof document !== 'undefined') {
+      document.documentElement.classList.toggle('dark', dark);
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(THEME_STORAGE_KEY, dark ? 'dark' : 'light');
+    }
+  };
+
+  const handleToggleDarkMode = () => {
+    applyThemePreference(!isDarkMode);
+  };
 
   const filteredConversations = useMemo(() => {
     const query = conversationSearchQuery.trim().toLowerCase();
@@ -263,7 +294,13 @@ export function ChatSidebar({
           <h2 className="text-lg font-semibold text-slate-900">{sectionTitle}</h2>
           {activeSection === 'conversations' && (
             <div className="flex items-center gap-2">
-              <Popover>
+              <Popover
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setOptionsExpanded(false);
+                  }
+                }}
+              >
                 <PopoverTrigger asChild>
                   <Button variant="ghost" size="icon" className="size-9 rounded-full">
                     <MoreHorizontal className="size-5" />
@@ -273,16 +310,53 @@ export function ChatSidebar({
                   <div className="flex flex-col">
                     <button
                       type="button"
-                      className="rounded-md px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-slate-100"
+                    className="rounded-md px-3 py-2 text-left text-sm text-slate-600 transition"
                     >
                       Tin nhắn lưu trữ
                     </button>
                     <button
                       type="button"
-                      className="rounded-md px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-slate-100"
+                      onClick={() => setOptionsExpanded((prev) => !prev)}
+                      className="flex items-center justify-between rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 transition"
                     >
-                      Tuỳ chọn
+                      <span>Tuỳ chọn</span>
+                      <ChevronDown
+                        className={`size-4 transition-transform ${optionsExpanded ? 'rotate-180' : ''}`}
+                      />
                     </button>
+                    {optionsExpanded && (
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-slate-800">Chế độ tối</p>
+                            <p className="text-xs text-slate-500">
+                              Bật giao diện nền tối cho toàn bộ ứng dụng.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleToggleDarkMode}
+                            className={`flex items-center rounded-full px-3 py-1 text-xs font-semibold transition ${
+                              isDarkMode
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {isDarkMode ? (
+                              <>
+                                <Moon className="mr-1 size-3.5" />
+                                Đang bật
+                              </>
+                            ) : (
+                              <>
+                                <Sun className="mr-1 size-3.5" />
+                                Đang tắt
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </PopoverContent>
               </Popover>
@@ -297,7 +371,7 @@ export function ChatSidebar({
                     <Button
                       type="button"
                       variant="ghost"
-                      className="w-full justify-start px-0 text-left text-sm font-medium text-blue-600 hover:bg-transparent hover:text-blue-700"
+                      className="w-full justify-start px-0 text-left text-sm font-medium text-blue-600"
                       onClick={() => {
                         setNewChatOpen(false);
                         setCreateGroupOpen(true);
@@ -331,7 +405,7 @@ export function ChatSidebar({
                                 }
                               }}
                               disabled={actionDisabled}
-                              className="flex w-full items-center gap-3 rounded-lg p-2 transition-colors hover:bg-gray-100"
+                              className="flex w-full items-center gap-3 rounded-lg p-2 transition-colors"
                             >
                               <Avatar className="size-10">
                                 <AvatarFallback className="bg-blue-500 text-white">
@@ -368,11 +442,7 @@ export function ChatSidebar({
                 key={item.key}
                 type="button"
                 onClick={() => setActiveSection(item.key)}
-                className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                  isActive
-                    ? 'bg-blue-500 text-white shadow'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
+                className={`chip-button ${isActive ? 'chip-button--active' : ''}`}
               >
                 {item.label}
               </button>
@@ -392,7 +462,7 @@ export function ChatSidebar({
             <button
               type="button"
               onClick={onClearFriendFeedback}
-              className="ml-3 text-xs font-semibold uppercase tracking-wide text-inherit transition hover:opacity-75"
+              className="ml-3 text-xs font-semibold uppercase tracking-wide text-inherit transition"
             >
               Đóng
             </button>
@@ -409,7 +479,7 @@ export function ChatSidebar({
                   placeholder="Tìm kiếm trên chat"
                   value={conversationSearchQuery}
                   onChange={(event) => setConversationSearchQuery(event.target.value)}
-                  className="w-full rounded-full border-0 bg-slate-100 pl-10 text-sm focus-visible:ring-0"
+                  className="chat-search-input"
                 />
               </div>
             </div>
@@ -426,11 +496,7 @@ export function ChatSidebar({
                     key={item.key}
                     type="button"
                     onClick={() => setFilter(item.key)}
-                    className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                      isActive
-                        ? 'bg-blue-500 text-white shadow'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
+                    className={`chip-button ${isActive ? 'chip-button--active' : ''}`}
                   >
                     {item.label}
                   </button>
@@ -449,7 +515,7 @@ export function ChatSidebar({
                 placeholder="Tìm kiếm bạn bè theo tên hoặc email"
                 value={friendSearchQuery}
                 onChange={(event) => handleFriendSearchChange(event.target.value)}
-                className="w-full rounded-full border-0 bg-slate-100 pl-10 text-sm focus-visible:ring-0"
+                className="chat-search-input"
               />
             </div>
             <Button type="submit" className="rounded-full" disabled={searching}>
@@ -474,9 +540,7 @@ export function ChatSidebar({
                     key={conversation.id}
                     type="button"
                     onClick={() => onSelectConversation(conversation.id)}
-                    className={`flex w-full items-center gap-3 px-4 py-3 text-left transition ${
-                      isSelected ? 'bg-slate-100' : 'hover:bg-slate-50'
-                    }`}
+                    className={`conversation-row ${isSelected ? 'conversation-row--active' : ''}`}
                   >
                     <Avatar className="size-12">
                       <AvatarFallback className="bg-blue-500 text-base font-semibold text-white">
@@ -486,21 +550,21 @@ export function ChatSidebar({
                     <div className="min-w-0 flex-1">
                       <div className="mb-1 flex items-center justify-between gap-2">
                         <span
-                          className={`truncate text-sm font-medium ${
-                            isSelected ? 'text-blue-600' : 'text-slate-900'
+                          className={`conversation-row__title ${
+                            isSelected ? 'conversation-row__title--active' : ''
                           }`}
                         >
                           {conversation.title}
                         </span>
-                        <span className="text-xs text-slate-400">
+                        <span className="conversation-row__timestamp">
                           {formatTimestamp(conversation.updatedAt)}
                         </span>
                       </div>
                       <p
-                        className={`truncate text-xs ${
-                          (conversation.unreadCount ?? 0) > 0
-                            ? 'font-medium text-slate-900'
-                            : 'text-slate-500'
+                        className={`conversation-row__subtitle ${
+                          (conversation.unreadCount ?? 0)
+                            ? 'conversation-row__subtitle--unread'
+                            : ''
                         }`}
                       >
                         {conversation.lastMessageSnippet ||
@@ -716,7 +780,7 @@ export function ChatSidebar({
               <button
                 type="button"
                 onClick={closeGroupModal}
-                className="rounded-full p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                className="rounded-full p-1.5 text-slate-400 transition"
               >
                 <X className="size-4" />
                 <span className="sr-only">Đóng</span>
@@ -759,7 +823,7 @@ export function ChatSidebar({
                     <button
                       key={conversation.id}
                       type="button"
-                      className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left text-sm transition hover:border-blue-200 hover:bg-blue-50"
+                      className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left text-sm transition"
                     >
                       <span className="truncate font-medium text-slate-900">
                         {conversation.title}
@@ -812,11 +876,11 @@ export function ChatSidebar({
                                   toggleGroupMember(friend.id);
                                 }}
                                 disabled={creatingGroup}
-                                className={`group flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition ${
-                                  isSelected
-                                    ? 'border-blue-500 bg-blue-50 shadow-sm'
-                                    : 'border-slate-200 hover:border-blue-200 hover:bg-blue-50'
-                                } ${creatingGroup ? 'cursor-not-allowed opacity-60' : ''}`}
+                              className={`group flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition ${
+                                isSelected
+                                  ? 'border-blue-500 bg-blue-50 shadow-sm'
+                                  : 'border-slate-200'
+                              } ${creatingGroup ? 'cursor-not-allowed opacity-60' : ''}`}
                               >
                                 <div className="flex items-center gap-3">
                                   <Avatar className="size-8">
@@ -837,7 +901,7 @@ export function ChatSidebar({
                                   className={`flex size-5 items-center justify-center rounded-full border transition ${
                                     isSelected
                                       ? 'border-blue-500 bg-blue-500 text-white'
-                                      : 'border-slate-300 text-slate-400 opacity-0 group-hover:opacity-100'
+                                      : 'border-slate-300 text-slate-400'
                                   }`}
                                 >
                                   <Check className="size-3" />

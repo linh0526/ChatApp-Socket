@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent, ChangeEvent } from 'react';
-import { Info, Menu, Mic, Phone, Send, Square, Video, Image as ImageIcon } from 'lucide-react';
+import type { ChangeEvent, KeyboardEvent } from 'react';
+import { Image as ImageIcon, Info, Menu, Mic, Phone, Send, Smile, Square, Video } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { ScrollArea } from './ui/scroll-area';
 import type { ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
 interface ChatInterfaceProps {
   conversation?: ConversationPreview;
@@ -67,6 +68,8 @@ export function ChatInterface({
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
   const [voiceComposerState, setVoiceComposerState] = useState<'idle' | 'recording' | 'review'>('idle');
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const conversationDisplay = useMemo<ConversationPreview | null>(() => {
     if (conversation) return conversation;
@@ -142,6 +145,38 @@ export function ChatInterface({
     } catch (error) {
       console.error('Failed to start voice message recording:', error);
       setVoiceComposerState('idle');
+    }
+  };
+
+  const handleEmojiSelect = (emoji: string) => {
+    if (!isConversationSelected) return;
+    onInputChange(`${inputValue}${emoji}`);
+    setEmojiPickerOpen(false);
+  };
+
+  const handleImageButtonClick = () => {
+    if (!isConversationSelected) {
+      window.alert('Vui lòng chọn một cuộc trò chuyện trước khi gửi ảnh.');
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const handleImageChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+    if (!onSendImage) {
+      window.alert('Tính năng gửi ảnh hiện chưa khả dụng.');
+      return;
+    }
+    try {
+      await onSendImage(file);
+    } catch (error) {
+      console.error('Failed to send image message:', error);
+      window.alert('Không thể gửi ảnh. Vui lòng thử lại.');
     }
   };
 
@@ -232,31 +267,6 @@ export function ChatInterface({
       event.preventDefault();
       handleSubmit();
     }
-  };
-
-  const handleImageSelect = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-      window.alert('Vui lòng chọn một file hình ảnh hợp lệ.');
-      return;
-    }
-
-    // Validate file size (max 10MB)
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSize) {
-      window.alert('Kích thước file quá lớn. Vui lòng chọn file nhỏ hơn 10MB.');
-      return;
-    }
-
-    if (onSendImage) {
-      onSendImage(file);
-    }
-
-    // Reset input
-    event.target.value = '';
   };
 
   const renderBody = () => {
@@ -366,42 +376,6 @@ export function ChatInterface({
                         <p className="text-xs text-slate-500">{message.content}</p>
                       )}
                     </div>
-                  ) : message.image ? (
-                    <div className="flex flex-col gap-2">
-                      {message.image.dataUrl || message.image.url ? (
-                        <img
-                          src={message.image.dataUrl || message.image.url}
-                          alt={message.image.originalName || 'Hình ảnh'}
-                          className="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-                          style={{ maxHeight: '400px', objectFit: 'contain' }}
-                          onError={(e) => {
-                            console.error('Image load error:', {
-                              src: message.image?.dataUrl || message.image?.url,
-                              image: message.image,
-                            });
-                            e.currentTarget.style.display = 'none';
-                          }}
-                          onLoad={() => {
-                            console.log('Image loaded successfully:', message.image?.originalName);
-                          }}
-                        />
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          <p className="text-sm text-slate-500">Không thể hiển thị hình ảnh.</p>
-                          {message.image.originalName && (
-                            <p className="text-xs text-slate-400">File: {message.image.originalName}</p>
-                          )}
-                        </div>
-                      )}
-                      {message.image.originalName && (
-                        <p className="text-xs text-slate-500">
-                          {message.image.originalName}
-                        </p>
-                      )}
-                      {message.content && message.content !== 'Hình ảnh' && (
-                        <p className="text-xs text-slate-500">{message.content}</p>
-                      )}
-                    </div>
                   ) : (
                     <p className="whitespace-pre-line break-words">{message.content}</p>
                   )}
@@ -496,6 +470,38 @@ export function ChatInterface({
         <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-3 sm:flex-nowrap">
           {voiceComposerState === 'idle' && (
             <>
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                onChange={handleImageChange}
+                className="hidden"
+              />
+              <div className="flex flex-1 items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={handleImageButtonClick}
+                    size="icon"
+                    className="rounded-full"
+                    variant="outline"
+                    disabled={!isConversationSelected}
+                    title="Gửi hình ảnh"
+                    aria-label="Gửi hình ảnh"
+                  >
+                    <ImageIcon className="size-4" />
+                  </Button>
+                  <Button
+                    onClick={handleVoiceMessageStart}
+                    size="icon"
+                    className="rounded-full"
+                    variant="outline"
+                    disabled={!isConversationSelected}
+                    title="Gửi tin nhắn thoại"
+                    aria-label="Gửi tin nhắn thoại"
+                  >
+                    <Mic className="size-4" />
+                  </Button>
+                </div>
               <Input
                 type="text"
                 placeholder={isConversationSelected ? "Aa" : "Chọn cuộc trò chuyện để nhắn tin"}
@@ -505,45 +511,97 @@ export function ChatInterface({
                 disabled={sending || !isConversationSelected}
                 className="flex-1 min-w-0 rounded-full bg-white"
               />
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageSelect}
-                className="hidden"
-                id="image-upload-input"
-                disabled={!isConversationSelected}
-              />
-              <Button
-                onClick={() => document.getElementById('image-upload-input')?.click()}
-                size="icon"
-                className="rounded-full"
-                variant="outline"
-                disabled={!isConversationSelected}
-                title="Gửi hình ảnh"
-                aria-label="Gửi hình ảnh"
-                type="button"
-              >
-                <ImageIcon className="size-4" />
-              </Button>
-              <Button
-                onClick={handleVoiceMessageStart}
-                size="icon"
-                className="rounded-full"
-                variant="outline"
-                disabled={!isConversationSelected}
-                title="Gửi tin nhắn thoại"
-                aria-label="Gửi tin nhắn thoại"
-              >
-                <Mic className="size-4" />
-              </Button>
-              <Button
-                onClick={handleSubmit}
-                size="icon"
-                className="rounded-full"
-                disabled={sending || !inputValue.trim() || !isConversationSelected}
-              >
-                <Send className="size-4" />
-              </Button>
+                <div className="flex items-center gap-2">
+                  <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="rounded-full"
+                        disabled={!isConversationSelected}
+                        title="Chọn emoji"
+                        aria-label="Chọn emoji"
+                      >
+                        <Smile className="size-4" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 bg-white p-2" align="end">
+                      <div className="grid grid-cols-8 gap-2">
+                        {[
+                          '😀',
+                          '😁',
+                          '😂',
+                          '🤣',
+                          '😄',
+                          '😅',
+                          '😊',
+                          '😍',
+                          '😘',
+                          '😗',
+                          '😙',
+                          '😚',
+                          '🙂',
+                          '🤗',
+                          '🤩',
+                          '🤔',
+                          '😎',
+                          '😪',
+                          '😭',
+                          '😤',
+                          '😡',
+                          '🥳',
+                          '😇',
+                          '🤤',
+                          '😴',
+                          '👍',
+                          '👎',
+                          '🙏',
+                          '👏',
+                          '🙌',
+                          '💪',
+                          '🎉',
+                          '❤️',
+                          '💖',
+                          '💔',
+                          '🔥',
+                          '✨',
+                          '💯',
+                          '🌟',
+                          '🧠',
+                          '🎧',
+                          '🥰',
+                          '🤯',
+                          '🤝',
+                          '☕',
+                          '🍀',
+                        ].map(
+                          (emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              className="text-xl transition hover:scale-110"
+                              onClick={() => handleEmojiSelect(emoji)}
+                            >
+                              {emoji}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <Button
+                    onClick={handleSubmit}
+                    size="icon"
+                    className="rounded-full"
+                    disabled={sending || !inputValue.trim() || !isConversationSelected}
+                    title="Gửi tin nhắn"
+                    aria-label="Gửi tin nhắn"
+                  >
+                    <Send className="size-4" />
+                  </Button>
+                </div>
+              </div>
             </>
           )}
 
