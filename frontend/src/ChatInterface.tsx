@@ -30,6 +30,7 @@ interface ChatInterfaceProps {
   isMobile?: boolean;
   onOpenSidebar?: () => void;
   onVideoCall?: () => void;
+  onAudioCall?: () => void;
   onSendImage?: (file: File) => void | Promise<void>;
 }
 
@@ -63,6 +64,7 @@ export function ChatInterface({
   isMobile,
   onOpenSidebar,
   onVideoCall,
+  onAudioCall,
   onSendImage,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -429,7 +431,14 @@ export function ChatInterface({
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" className="rounded-full">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="rounded-full"
+                  onClick={onAudioCall}
+                  title="Gọi thoại"
+                  aria-label="Gọi thoại"
+                >
                   <Phone className="size-5 text-blue-500" />
                 </Button>
               <Button 

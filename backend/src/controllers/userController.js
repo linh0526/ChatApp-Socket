@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const { getOnlineUserIds, isUserOnline } = require('./messageController');
 
 const normalizeUser = (user) => ({
   id: user._id.toString(),
@@ -40,6 +41,31 @@ exports.searchUsers = async (req, res) => {
   } catch (error) {
     console.error('searchUsers error:', error);
     return res.status(500).json({ error: 'Không thể tìm kiếm người dùng' });
+  }
+};
+
+exports.getOnlineUsers = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const onlineUserIds = getOnlineUserIds();
+    
+    // Get user's friends
+    const currentUser = await User.findById(userId).select('friends').lean();
+    if (!currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const friendIds = (currentUser.friends ?? []).map((id) => id.toString());
+    
+    // Filter to only include friends who are online
+    const onlineFriends = onlineUserIds.filter((id) => 
+      friendIds.includes(id) && id !== userId
+    );
+    
+    return res.json({ onlineUserIds: onlineFriends });
+  } catch (error) {
+    console.error('getOnlineUsers error:', error);
+    return res.status(500).json({ error: 'Không thể lấy danh sách người dùng online' });
   }
 };
 

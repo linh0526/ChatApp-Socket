@@ -67,12 +67,14 @@ const sortMessagesAsc = (items: Message[]) =>
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '';
-// For production (Vercel): Use VITE_BACKEND_URL directly (no proxy)
+
+// For production: Use VITE_BACKEND_URL directly (no proxy)
 // For local development: Use window.location.origin (proxy via vite.config.ts)
+// Socket.IO will connect to /socket.io which is proxied to backend
 const SOCKET_URL = 
-  (import.meta.env.VITE_BACKEND_URL as string | undefined)?.replace(/\/$/, '') ||
-  API_BASE_URL ||
-  window.location.origin.replace(/\/$/, '');
+  import.meta.env.PROD
+    ? (import.meta.env.VITE_BACKEND_URL as string | undefined)?.replace(/\/$/, '') || API_BASE_URL
+    : window.location.origin.replace(/\/$/, '');
 
 const getInitials = (text: string) =>
   text
@@ -174,6 +176,7 @@ function Chat() {
   const [voiceMessagePending, setVoiceMessagePending] = useState(false);
   const [voiceRecordingReady, setVoiceRecordingReady] = useState(false);
   const [isVideoCallOpen, setIsVideoCallOpen] = useState(false);
+  const [callType, setCallType] = useState<'video' | 'audio'>('video');
 
   const assetBaseUrl = useMemo(() => {
     if (API_BASE_URL) {
@@ -516,7 +519,27 @@ function Chat() {
       if (!response.ok) {
         throw new Error(data?.error ?? 'Không thể tải danh sách bạn bè');
       }
-      setFriends(data.friends ?? []);
+      const friendsList = data.friends ?? [];
+      
+      // Fetch online users and update friends status
+      try {
+        const onlineResponse = await fetch(`${API_BASE_URL}/api/users/online`, {
+          headers: { ...authHeaders() },
+        });
+        if (onlineResponse.ok) {
+          const onlineData: { onlineUserIds?: string[] } = await onlineResponse.json();
+          const onlineIds = new Set(onlineData.onlineUserIds ?? []);
+          const friendsWithStatus = friendsList.map(friend => ({
+            ...friend,
+            isOnline: onlineIds.has(friend.id),
+          }));
+          setFriends(friendsWithStatus);
+        } else {
+          setFriends(friendsList);
+        }
+      } catch {
+        setFriends(friendsList);
+      }
     } catch (err) {
       console.error('fetchFriends error:', err);
     }
@@ -1160,17 +1183,18 @@ function Chat() {
   }, [selectedConversationId]);
 
   const handleStartVideoCall = useCallback(() => {
-    console.log('[App] 📞 Starting video call');
-    if (!selectedConversationId) {
-      console.log('[App] ❌ No conversation selected');
-      return;
-    }
+    if (!selectedConversationId) return;
     const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) {
-      console.log('[App] ❌ Conversation not found');
-      return;
-    }
-    console.log('[App] 🎬 Opening VideoCall component for conversation:', selectedConversationId);
+    if (!conversation) return;
+    setCallType('video');
+    setIsVideoCallOpen(true);
+  }, [selectedConversationId, conversations]);
+
+  const handleStartAudioCall = useCallback(() => {
+    if (!selectedConversationId) return;
+    const conversation = conversations.find((c) => c.id === selectedConversationId);
+    if (!conversation) return;
+    setCallType('audio');
     setIsVideoCallOpen(true);
   }, [selectedConversationId, conversations]);
 
@@ -1243,53 +1267,122 @@ function Chat() {
     }
   }, [token, selectedConversationId, fetchMessages, isInitialized]);
 
+  const handleIncomingVideoCallOffer = useCallback((data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
+    if (data.conversationId) {
+      setSelectedConversationId(prev => {
+        if (prev !== data.conversationId) {
+          return data.conversationId;
+        }
+        return prev;
+      });
+    }
+    setIsVideoCallOpen(true);
+  }, []);
+
+  const handleUserOnline = useCallback((data: { userId: string; username?: string }) => {
+    setFriends(prev => prev.map(friend => 
+      friend.id === data.userId ? { ...friend, isOnline: true } : friend
+    ));
+  }, []);
+
+  const handleUserOffline = useCallback((data: { userId: string }) => {
+    setFriends(prev => prev.map(friend => 
+      friend.id === data.userId ? { ...friend, isOnline: false } : friend
+    ));
+  }, []);
+
+  // Socket connection - only recreate when token changes
   useEffect(() => {
-    if (!token) return;
-    console.log('[App] 🔌 Connecting to socket:', SOCKET_URL);
-    console.log('[App] Environment:', {
-      VITE_BACKEND_URL: import.meta.env.VITE_BACKEND_URL,
-      VITE_API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
-      isProduction: import.meta.env.PROD,
-    });
-    const socket = io(SOCKET_URL, { transports: ['websocket'], withCredentials: true });
+    if (!token) {
+      // Cleanup existing socket if token is removed
+      if (socketRef.current) {
+        socketRef.current.removeAllListeners();
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      return;
+    }
+
+    // Don't recreate socket if it already exists and is connected
+    if (socketRef.current) {
+      const currentSocket = socketRef.current;
+      if (currentSocket.connected) {
+        return;
+      }
+      // If socket exists but disconnected, cleanup first
+      currentSocket.removeAllListeners();
+      currentSocket.disconnect();
+      socketRef.current = null;
+    }
+
+    // In development, use proxy path. In production, use full URL
+    const socketOptions: any = {
+      transports: ['websocket', 'polling'], // Allow fallback to polling
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 20000,
+    };
+    
+    // In development (using proxy), Socket.IO will connect to /socket.io
+    // In production, connect directly to backend URL
+    const socket = import.meta.env.PROD
+      ? io(SOCKET_URL, socketOptions)
+      : io(SOCKET_URL, { ...socketOptions, path: '/socket.io' });
+    
     socketRef.current = socket;
+    let isCleanedUp = false;
 
-    const handleConnected = () => {
-      // Only fetch messages if initialized and have a selected conversation
-      if (isInitialized && selectedConversationId) {
-        fetchMessages({ silent: true, conversationId: selectedConversationId });
+    // Authenticate user when socket connects
+    const handleConnect = () => {
+      if (isCleanedUp) return;
+      const currentToken = localStorage.getItem('token');
+      if (currentToken) {
+        socket.emit('user:authenticate', { token: currentToken });
       }
     };
 
-    // Handle incoming video call offer
-    const handleIncomingVideoCallOffer = (data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
-      console.log('[App] 📞 Received incoming video call offer:', data);
-      // Auto-select the conversation if not already selected
-      if (data.conversationId && data.conversationId !== selectedConversationId) {
-        console.log('[App] 🔄 Auto-selecting conversation:', data.conversationId);
-        setSelectedConversationId(data.conversationId);
-      }
-      // Open video call component
-      console.log('[App] 🎬 Opening VideoCall component');
-      setIsVideoCallOpen(true);
-    };
-
+    socket.on('connect', handleConnect);
     socket.on('message:new', handleIncomingMessage);
-    socket.on('connect', handleConnected);
     socket.on('video-call:offer', handleIncomingVideoCallOffer);
+    socket.on('user:online', handleUserOnline);
+    socket.on('user:offline', handleUserOffline);
 
     if (socket.connected) {
-      void handleConnected();
+      handleConnect();
     }
 
     return () => {
-      socket.off('message:new', handleIncomingMessage);
-      socket.off('connect', handleConnected);
-      socket.off('video-call:offer', handleIncomingVideoCallOffer);
-      socket.disconnect();
-      socketRef.current = null;
+      isCleanedUp = true;
+      if (socketRef.current === socket) {
+        socket.removeAllListeners();
+        // Only disconnect if socket is actually connected
+        if (socket.connected) {
+          socket.disconnect();
+        }
+        socketRef.current = null;
+      }
     };
-  }, [token, handleIncomingMessage, fetchMessages, selectedConversationId, isInitialized]);
+  }, [token]); // Only depend on token - socket should persist
+
+  // Update handlers when they change (but don't recreate socket)
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || !token) return;
+
+    // Update handlers by removing and re-adding
+    socket.off('message:new');
+    socket.off('video-call:offer');
+    socket.off('user:online');
+    socket.off('user:offline');
+
+    socket.on('message:new', handleIncomingMessage);
+    socket.on('video-call:offer', handleIncomingVideoCallOffer);
+    socket.on('user:online', handleUserOnline);
+    socket.on('user:offline', handleUserOffline);
+  }, [token, handleIncomingMessage, handleIncomingVideoCallOffer, handleUserOnline, handleUserOffline]);
+
 
   const sendMessage = async () => {
     if (!content.trim()) {
@@ -1455,6 +1548,7 @@ function Chat() {
           onVoiceMessageCancel={cancelVoiceMessage}
           voiceRecordingReady={voiceRecordingReady}
           onVideoCall={handleStartVideoCall}
+          onAudioCall={handleStartAudioCall}
           onSendImage={sendImageMessage}
         />
       </div>
@@ -1465,6 +1559,7 @@ function Chat() {
           conversationId={selectedConversationId}
           otherUserName={getOtherUserName()}
           socket={socketRef.current}
+          callType={callType}
         />
       )}
     </div>

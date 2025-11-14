@@ -407,13 +407,23 @@ export function ChatSidebar({
                               disabled={actionDisabled}
                               className="flex w-full items-center gap-3 rounded-lg p-2 transition-colors"
                             >
-                              <Avatar className="size-10">
-                                <AvatarFallback className="bg-blue-500 text-white">
-                                  {friend.username ? getInitials(friend.username) : '?'}
-                                </AvatarFallback>
-                              </Avatar>
+                              <div className="relative">
+                                <Avatar className="size-10">
+                                  <AvatarFallback className="bg-blue-500 text-white">
+                                    {friend.username ? getInitials(friend.username) : '?'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                {friend.isOnline && (
+                                  <span className="absolute bottom-0 right-0 size-3 rounded-full border-2 border-white bg-green-500" />
+                                )}
+                              </div>
                               <div className="flex-1 text-left">
-                                <p className="text-sm text-slate-900">{friend.username}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm text-slate-900">{friend.username}</p>
+                                  {friend.isOnline && (
+                                    <span className="text-xs text-green-600 font-medium">Online</span>
+                                  )}
+                                </div>
                                 {friend.email && (
                                   <p className="text-xs text-slate-500">{friend.email}</p>
                                 )}
@@ -649,9 +659,26 @@ export function ChatSidebar({
                       key={friend.id}
                       className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3"
                     >
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{friend.username}</p>
-                        <p className="text-xs text-slate-500">{friend.email}</p>
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          <Avatar className="size-10">
+                            <AvatarFallback className="bg-blue-500 text-white">
+                              {friend.username ? getInitials(friend.username) : '?'}
+                            </AvatarFallback>
+                          </Avatar>
+                          {friend.isOnline && (
+                            <span className="absolute bottom-0 right-0 size-3 rounded-full border-2 border-white bg-green-500" />
+                          )}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-slate-900">{friend.username}</p>
+                            {friend.isOnline && (
+                              <span className="text-xs text-green-600 font-medium">Online</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500">{friend.email}</p>
+                        </div>
                       </div>
                       <Button
                         type="button"
@@ -883,15 +910,25 @@ export function ChatSidebar({
                               } ${creatingGroup ? 'cursor-not-allowed opacity-60' : ''}`}
                               >
                                 <div className="flex items-center gap-3">
-                                  <Avatar className="size-8">
-                                    <AvatarFallback className="bg-blue-500 text-sm font-semibold text-white">
-                                      {friend.username ? getInitials(friend.username) : '?'}
-                                    </AvatarFallback>
-                                  </Avatar>
+                                  <div className="relative">
+                                    <Avatar className="size-8">
+                                      <AvatarFallback className="bg-blue-500 text-sm font-semibold text-white">
+                                        {friend.username ? getInitials(friend.username) : '?'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    {friend.isOnline && (
+                                      <span className="absolute bottom-0 right-0 size-3 rounded-full border-2 border-white bg-green-500" />
+                                    )}
+                                  </div>
                                   <div className="flex-1">
-                                    <p className="text-sm font-medium text-slate-900">
-                                      {friend.username}
-                                    </p>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-sm font-medium text-slate-900">
+                                        {friend.username}
+                                      </p>
+                                      {friend.isOnline && (
+                                        <span className="text-xs text-green-600 font-medium">Online</span>
+                                      )}
+                                    </div>
                                     {friend.email && (
                                       <p className="text-xs text-slate-500">{friend.email}</p>
                                     )}

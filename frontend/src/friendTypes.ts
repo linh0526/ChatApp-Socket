@@ -2,6 +2,7 @@ export interface FriendSummary {
   id: string;
   username: string;
   email: string;
+  isOnline?: boolean;
 }
 
 export type FriendRequestStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';

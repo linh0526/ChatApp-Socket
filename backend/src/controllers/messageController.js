@@ -6,6 +6,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
 let ioInstance = null;
 const socketUsers = new Map(); // Map socket.id -> { userId, username, conversationId }
+const onlineUsers = new Set(); // Set of userId strings for quick lookup
 
 const setSocketIO = (io) => {
   ioInstance = io;
@@ -259,6 +260,30 @@ const createMessage = async (req, res) => {
 };
 
 const registerSocketHandlers = (socket) => {
+  // Track user online when they authenticate
+  socket.on('user:authenticate', async (payload) => {
+    try {
+      const { token } = payload ?? {};
+      if (!token) return;
+      
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
+      const username = decoded.username;
+      
+      // Track user as online
+      if (!onlineUsers.has(userId)) {
+        onlineUsers.add(userId);
+        socketUsers.set(socket.id, { userId, username, conversationId: null });
+        // Notify others that user came online
+        if (ioInstance) {
+          ioInstance.emit('user:online', { userId, username });
+        }
+      }
+    } catch (error) {
+      // Ignore auth errors
+    }
+  });
+
   socket.on('message:list', async (payload, callback) => {
     try {
       const { token, conversationId } = payload ?? {};
@@ -268,6 +293,16 @@ const registerSocketHandlers = (socket) => {
 
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.id;
+      const username = decoded.username;
+      
+      // Track user as online when they use any authenticated event
+      if (!onlineUsers.has(userId)) {
+        onlineUsers.add(userId);
+        socketUsers.set(socket.id, { userId, username, conversationId: null });
+        if (ioInstance) {
+          ioInstance.emit('user:online', { userId, username });
+        }
+      }
 
       if (conversationId) {
         const conversation = await Conversation.findById(conversationId).select('participants');
@@ -539,8 +574,26 @@ const registerSocketHandlers = (socket) => {
   });
 
   socket.on('disconnect', () => {
-    socketUsers.delete(socket.id);
+    const userInfo = socketUsers.get(socket.id);
+    if (userInfo) {
+      socketUsers.delete(socket.id);
+      onlineUsers.delete(userInfo.userId);
+      // Notify others that user went offline
+      if (ioInstance) {
+        ioInstance.emit('user:offline', { userId: userInfo.userId });
+      }
+    }
   });
+};
+
+// Helper function to get online user IDs
+const getOnlineUserIds = () => {
+  return Array.from(onlineUsers);
+};
+
+// Helper function to check if user is online
+const isUserOnline = (userId) => {
+  return onlineUsers.has(userId);
 };
 
 const createVoiceMessage = async (req, res) => {
@@ -673,5 +726,7 @@ module.exports = {
   createImageMessage,
   registerSocketHandlers,
   setSocketIO,
+  getOnlineUserIds,
+  isUserOnline,
 };
 
