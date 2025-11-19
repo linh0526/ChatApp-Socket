@@ -31,6 +31,7 @@ export interface ChatMessage {
   senderId?: string | null;
   content: string;
   createdAt: string;
+  conversation?: string | null;
   error?: string;
   isPending?: boolean;
   messageType?: 'text' | 'voice' | 'image' | 'file';
@@ -38,5 +39,8 @@ export interface ChatMessage {
   image?: ImagePayload | null;
   file?: FilePayload | null;
   seenBy?: string[];
+  isRecalled?: boolean;
+  recalledAt?: string | null;
+  recalledBy?: string | null;
 }
 

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   ChevronDown,
   Loader2,
@@ -11,6 +13,7 @@ import {
   Sun,
   X,
   UserCheck,
+  UserMinus,
   UserPlus,
   UserX,
 } from 'lucide-react';
@@ -29,12 +32,17 @@ import type {
 
 interface ChatSidebarProps {
   conversations: ConversationPreview[];
+  archivedConversations: ConversationPreview[];
   selectedConversationId: string | null;
   onSelectConversation: (id: string) => void;
+  onArchiveConversation: (id: string) => Promise<void>;
+  onUnarchiveConversation: (id: string) => Promise<void>;
+  onRefreshArchived: () => Promise<void>;
   friends: FriendSummary[];
   incomingRequests: FriendRequestPreview[];
   outgoingRequests: FriendRequestPreview[];
   onStartConversation: (friendId: string) => Promise<void>;
+  onRemoveFriend: (friendId: string) => Promise<void>;
   onSendFriendRequest: (target: FriendRequestTarget) => Promise<void>;
   onAcceptFriendRequest: (requestId: string) => Promise<void>;
   onDeclineFriendRequest: (requestId: string) => Promise<void>;
@@ -77,12 +85,17 @@ const getInitials = (text: string) =>
 
 export function ChatSidebar({
   conversations,
+  archivedConversations,
   selectedConversationId,
   onSelectConversation,
+  onArchiveConversation,
+  onUnarchiveConversation,
+  onRefreshArchived,
   friends,
   incomingRequests,
   outgoingRequests,
   onStartConversation,
+  onRemoveFriend,
   onSendFriendRequest,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
@@ -109,6 +122,12 @@ export function ChatSidebar({
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [optionsExpanded, setOptionsExpanded] = useState(false);
+  const [archivingConversationId, setArchivingConversationId] = useState<string | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedError, setArchivedError] = useState<string | null>(null);
+  const [archivedActionId, setArchivedActionId] = useState<string | null>(null);
+  const [removingFriendId, setRemovingFriendId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!createGroupOpen) {
@@ -149,6 +168,59 @@ export function ChatSidebar({
 
   const handleToggleDarkMode = () => {
     applyThemePreference(!isDarkMode);
+  };
+
+  const handleArchiveConversationClick = async (conversationId: string) => {
+    setArchivingConversationId(conversationId);
+    try {
+      await onArchiveConversation(conversationId);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Không thể lưu trữ cuộc trò chuyện';
+      window.alert(message);
+    } finally {
+      setArchivingConversationId(null);
+    }
+  };
+
+  const handleOpenArchived = async () => {
+    setArchivedError(null);
+    setArchivedOpen(true);
+    setArchivedLoading(true);
+    try {
+      await onRefreshArchived();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể tải tin nhắn lưu trữ';
+      setArchivedError(message);
+    } finally {
+      setArchivedLoading(false);
+    }
+  };
+
+  const handleCloseArchived = () => {
+    if (archivedActionId) {
+      return;
+    }
+    setArchivedOpen(false);
+    setArchivedError(null);
+  };
+
+  const handleRestoreConversation = async (conversationId: string, openAfter: boolean) => {
+    setArchivedActionId(conversationId);
+    setArchivedError(null);
+    try {
+      await onUnarchiveConversation(conversationId);
+      await onRefreshArchived();
+      if (openAfter) {
+        setArchivedOpen(false);
+        onSelectConversation(conversationId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể bỏ lưu trữ cuộc trò chuyện';
+      setArchivedError(message);
+    } finally {
+      setArchivedActionId(null);
+    }
   };
 
   const filteredConversations = useMemo(() => {
@@ -287,6 +359,28 @@ export function ChatSidebar({
 
   const actionDisabled = friendActionPending;
 
+  const handleRemoveFriend = async (friend: FriendSummary) => {
+    if (!onRemoveFriend || actionDisabled) {
+      return;
+    }
+    const confirmMessage = friend.username
+      ? `Bạn có chắc muốn xoá ${friend.username} khỏi danh sách bạn bè?`
+      : 'Bạn có chắc muốn xoá người bạn này?';
+    const confirmed = window.confirm(confirmMessage);
+    if (!confirmed) {
+      return;
+    }
+    setRemovingFriendId(friend.id);
+    try {
+      await onRemoveFriend(friend.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể xoá bạn bè';
+      window.alert(message);
+    } finally {
+      setRemovingFriendId(null);
+    }
+  };
+
   return (
     <div className="chat-sidebar">
       <div className="p-4">
@@ -310,9 +404,15 @@ export function ChatSidebar({
                   <div className="flex flex-col">
                     <button
                       type="button"
-                    className="rounded-md px-3 py-2 text-left text-sm text-slate-600 transition"
+                      onClick={handleOpenArchived}
+                      className="rounded-md px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-slate-100"
                     >
                       Tin nhắn lưu trữ
+                      {archivedConversations.length > 0 && (
+                        <span className="ml-2 inline-flex items-center justify-center rounded-full bg-slate-200 px-2 text-xs font-semibold text-slate-600">
+                          {archivedConversations.length}
+                        </span>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -566,9 +666,34 @@ export function ChatSidebar({
                         >
                           {conversation.title}
                         </span>
-                        <span className="conversation-row__timestamp">
-                          {formatTimestamp(conversation.updatedAt)}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="conversation-row__timestamp">
+                            {formatTimestamp(conversation.updatedAt)}
+                          </span>
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleArchiveConversationClick(conversation.id);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void handleArchiveConversationClick(conversation.id);
+                              }
+                            }}
+                            className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            aria-label="Lưu trữ cuộc trò chuyện"
+                          >
+                            {archivingConversationId === conversation.id ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <Archive className="size-4" />
+                            )}
+                          </div>
+                        </div>
                       </div>
                       <p
                         className={`conversation-row__subtitle ${
@@ -680,17 +805,35 @@ export function ChatSidebar({
                           <p className="text-xs text-slate-500">{friend.email}</p>
                         </div>
                       </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="rounded-full"
-                        onClick={() => onStartConversation(friend.id)}
-                        disabled={actionDisabled}
-                      >
-                        <MessageSquarePlus className="mr-2 size-4" />
-                        Nhắn tin
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-full"
+                          onClick={() => onStartConversation(friend.id)}
+                          disabled={actionDisabled}
+                        >
+                          <MessageSquarePlus className="mr-2 size-4" />
+                          Nhắn tin
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-full text-red-500 hover:bg-red-50 hover:text-red-600"
+                          onClick={() => handleRemoveFriend(friend)}
+                          disabled={removingFriendId === friend.id}
+                          title="Xoá bạn bè"
+                          aria-label="Xoá bạn bè"
+                        >
+                          {removingFriendId === friend.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <UserMinus className="size-4" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -788,6 +931,110 @@ export function ChatSidebar({
         )}
       </div>
 
+      {archivedOpen && (
+        <div
+          className="fixed inset-0 z-40 flex items-stretch justify-end bg-black/40 p-0 sm:p-6"
+          onClick={handleCloseArchived}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="archived-conversations-title"
+            className="flex h-full w-full max-w-full flex-col overflow-hidden bg-white shadow-2xl sm:max-w-lg sm:rounded-l-3xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2 id="archived-conversations-title" className="text-lg font-semibold text-slate-900">
+                  Tin nhắn đã lưu trữ
+                </h2>
+                <p className="text-sm text-slate-500">Quản lý các cuộc trò chuyện đã lưu trữ của bạn.</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseArchived}
+                className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100"
+              >
+                <X className="size-4" />
+                <span className="sr-only">Đóng</span>
+              </button>
+            </div>
+
+            <div className="flex flex-1 flex-col gap-3 px-6 py-4">
+              {archivedError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  {archivedError}
+                </div>
+              )}
+
+              {archivedLoading ? (
+                <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
+                  <Loader2 className="mr-2 size-4 animate-spin text-blue-500" />
+                  Đang tải danh sách tin nhắn lưu trữ...
+                </div>
+              ) : archivedConversations.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center text-sm text-slate-500">
+                  Bạn chưa lưu trữ cuộc trò chuyện nào.
+                </div>
+              ) : (
+                <ScrollArea className="flex-1">
+                  <div className="space-y-3 pr-2">
+                    {archivedConversations.map((conversation) => {
+                      const isProcessing = archivedActionId === conversation.id;
+                      return (
+                        <div
+                          key={conversation.id}
+                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{conversation.title}</p>
+                            <p className="text-xs text-slate-500">
+                              Lưu trữ lúc:{' '}
+                              {conversation.archivedAt
+                                ? formatTimestamp(conversation.archivedAt)
+                                : formatTimestamp(conversation.updatedAt)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="rounded-full"
+                              disabled={isProcessing}
+                              onClick={() => handleRestoreConversation(conversation.id, false)}
+                            >
+                              {isProcessing ? (
+                                <Loader2 className="mr-2 size-3.5 animate-spin" />
+                              ) : (
+                                <ArchiveRestore className="mr-2 size-4" />
+                              )}
+                              Bỏ lưu trữ
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="rounded-full"
+                              disabled={isProcessing}
+                              onClick={() => handleRestoreConversation(conversation.id, true)}
+                            >
+                              {isProcessing ? (
+                                <Loader2 className="mr-2 size-3.5 animate-spin" />
+                              ) : null}
+                              Mở
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {createGroupOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -797,7 +1044,7 @@ export function ChatSidebar({
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-group-title"
-            className="relative flex h-[800px] w-[600px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+            className="relative flex h-full max-h-[90vh] w-full max-w-[95vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:max-w-3xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">

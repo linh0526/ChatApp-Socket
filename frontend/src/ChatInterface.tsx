@@ -1,10 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent } from 'react';
-import { Download, FileText, Image as ImageIcon, Info, Menu, Mic, Paperclip, Send, Smile, Square } from 'lucide-react';
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
+import {
+  Archive,
+  ArchiveRestore,
+  Download,
+  FileText,
+  Image as ImageIcon,
+  Info,
+  Link as LinkIcon,
+  Loader2,
+  Menu,
+  Mic,
+  Paperclip,
+  Search,
+  Send,
+  Shield,
+  Smile,
+  Square,
+  Trash2,
+} from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { ScrollArea } from './ui/scroll-area';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from './ui/sheet';
 import type { ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
 import type { FriendSummary } from './friendTypes';
@@ -34,6 +53,15 @@ interface ChatInterfaceProps {
   onSendImage?: (file: File) => void | Promise<void>;
   onSendFile?: (file: File) => void | Promise<void>;
   friends: FriendSummary[];
+  onRecallMessage?: (messageId: string) => Promise<void>;
+  onSearchMessages?: (conversationId: string, query: string) => Promise<ChatMessage[]>;
+  onArchiveConversation?: (conversationId: string) => Promise<void>;
+  onUnarchiveConversation?: (conversationId: string) => Promise<void>;
+  onDeleteConversation?: (conversationId: string) => Promise<void>;
+  onLeaveConversation?: (
+    conversationId: string,
+    options?: { mode?: 'silent' | 'block' },
+  ) => Promise<void>;
 }
 
 const getInitials = (text: string) =>
@@ -69,6 +97,12 @@ export function ChatInterface({
   onSendImage,
   onSendFile,
   friends = [],
+  onRecallMessage,
+  onSearchMessages,
+  onArchiveConversation,
+  onUnarchiveConversation,
+  onDeleteConversation,
+  onLeaveConversation,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
@@ -76,6 +110,23 @@ export function ChatInterface({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [searchPopoverOpen, setSearchPopoverOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<ChatMessage[]>([]);
+  const [searchingMessages, setSearchingMessages] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [hasSearchedMessages, setHasSearchedMessages] = useState(false);
+  const [recallingMessageId, setRecallingMessageId] = useState<string | null>(null);
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  const [archivePending, setArchivePending] = useState(false);
+  const [infoPanelOpen, setInfoPanelOpen] = useState(false);
+  const [nicknameInput, setNicknameInput] = useState('');
+  const [nicknameDisplay, setNicknameDisplay] = useState('');
+  const [blockedUser, setBlockedUser] = useState(false);
+  const [isBlocking, setIsBlocking] = useState(false);
+  const [deleteConversationPending, setDeleteConversationPending] = useState(false);
+  const [leaveGroupPending, setLeaveGroupPending] = useState<'silent' | 'block' | null>(null);
 
   const conversationDisplay = useMemo<ConversationPreview | null>(() => {
     if (conversation) return conversation;
@@ -162,6 +213,37 @@ export function ChatInterface({
   }, [conversationDisplay?.participants]);
 
   const isConversationSelected = Boolean(selectedConversationId);
+  const isArchivedConversation = Boolean(conversationDisplay?.isArchived);
+  const canArchiveConversation =
+    Boolean(onArchiveConversation && onUnarchiveConversation && selectedConversationId);
+  const searchDisabled = !isConversationSelected || !onSearchMessages;
+
+  const mediaMessages = useMemo(
+    () =>
+      messages.filter(
+        (message) => message.image || message.file || message.voiceRecording,
+      ),
+    [messages],
+  );
+
+  const linkMessages = useMemo(() => {
+    const regex = /https?:\/\/[^\s]+/gi;
+    const links: Array<{ id: string; url: string; sender?: string; createdAt: string }> = [];
+    for (const message of messages) {
+      if (!message.content) continue;
+      const matches = message.content.match(regex);
+      if (!matches) continue;
+      matches.forEach((url, index) => {
+        links.push({
+          id: `${message.id}-${index}`,
+          url,
+          sender: message.sender,
+          createdAt: message.createdAt,
+        });
+      });
+    }
+    return links;
+  }, [messages]);
 
   useEffect(() => {
     const viewport = scrollAreaRef.current?.querySelector(
@@ -181,6 +263,22 @@ export function ChatInterface({
       setVoiceComposerState('idle');
     }
   }, [isConversationSelected]);
+
+  useEffect(() => {
+    setSearchResults([]);
+    setSearchQuery('');
+    setSearchError(null);
+    setHasSearchedMessages(false);
+    setSearchPopoverOpen(false);
+  }, [selectedConversationId]);
+
+  useEffect(() => {
+    const baseTitle = conversationDisplay?.title ?? 'Cuộc trò chuyện';
+    setNicknameInput(baseTitle);
+    setNicknameDisplay(baseTitle);
+    setBlockedUser(false);
+    setIsBlocking(false);
+  }, [conversationDisplay?.id, conversationDisplay?.title]);
 
   useEffect(() => {
     if (!conversationDisplay?.id) return;
@@ -232,6 +330,110 @@ export function ChatInterface({
     const rounded =
       size >= 10 || Number.isInteger(size) ? Math.round(size) : Number(size.toFixed(1));
     return `${rounded} ${units[unitIndex]}`;
+  };
+
+  const scrollToMessage = (messageId: string) => {
+    if (!scrollAreaRef.current) return;
+    const viewport =
+      scrollAreaRef.current.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]');
+    const container = viewport ?? scrollAreaRef.current;
+    const target = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  const formatDateTime = (value?: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const handleSelectSearchResult = (messageId: string) => {
+    scrollToMessage(messageId);
+    setHighlightMessageId(messageId);
+    setSearchPopoverOpen(false);
+    window.setTimeout(() => {
+      setHighlightMessageId((current) => (current === messageId ? null : current));
+    }, 2000);
+  };
+
+  const executeSearchMessages = async () => {
+    if (!onSearchMessages || !selectedConversationId) {
+      return;
+    }
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setSearchResults([]);
+      setSearchError('Vui lòng nhập nội dung cần tìm');
+      setHasSearchedMessages(false);
+      return;
+    }
+    setSearchingMessages(true);
+    setHasSearchedMessages(true);
+    try {
+      const results = await onSearchMessages(selectedConversationId, trimmed);
+      setSearchResults(results);
+      setSearchError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể tìm kiếm tin nhắn';
+      setSearchError(message);
+    } finally {
+      setSearchingMessages(false);
+    }
+  };
+
+  const handleSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void executeSearchMessages();
+  };
+
+  const handleSearchReset = () => {
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchError(null);
+    setHasSearchedMessages(false);
+  };
+
+  const handleRecallMessage = async (messageId: string) => {
+    if (!onRecallMessage) {
+      return;
+    }
+    setRecallingMessageId(messageId);
+    try {
+      await onRecallMessage(messageId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể thu hồi tin nhắn';
+      window.alert(message);
+    } finally {
+      setRecallingMessageId(null);
+    }
+  };
+
+  const handleToggleArchive = async () => {
+    if (!selectedConversationId || !onArchiveConversation || !onUnarchiveConversation) {
+      return;
+    }
+    setArchivePending(true);
+    try {
+      if (isArchivedConversation) {
+        await onUnarchiveConversation(selectedConversationId);
+      } else {
+        await onArchiveConversation(selectedConversationId);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Không thể cập nhật trạng thái lưu trữ';
+      window.alert(message);
+    } finally {
+      setArchivePending(false);
+    }
   };
 
   const handleImageButtonClick = () => {
@@ -305,6 +507,88 @@ export function ChatInterface({
       window.alert('Không tìm thấy ghi âm. Vui lòng thử lại.');
       setVoiceComposerState('idle');
       return;
+    }
+  };
+
+  const handleSaveNickname = () => {
+    const trimmed = nicknameInput.trim();
+    if (!trimmed) {
+      setNicknameInput(conversationDisplay?.title ?? 'Cuộc trò chuyện');
+      setNicknameDisplay(conversationDisplay?.title ?? 'Cuộc trò chuyện');
+      return;
+    }
+    setNicknameDisplay(trimmed);
+    window.alert('Biệt danh đã được cập nhật cục bộ cho cuộc trò chuyện này.');
+  };
+
+  const handleToggleBlockUser = async () => {
+    if (!otherFriend && !otherParticipant) {
+      window.alert('Không thể xác định người dùng để chặn.');
+      return;
+    }
+    const name = otherFriend?.username ?? otherParticipant?.username ?? 'người dùng này';
+    const actionLabel = blockedUser ? 'gỡ chặn' : 'chặn';
+    const confirmed = window.confirm(`Bạn có chắc muốn ${actionLabel} ${name}?`);
+    if (!confirmed) {
+      return;
+    }
+    setIsBlocking(true);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      setBlockedUser((prev) => !prev);
+      window.alert(
+        blockedUser
+          ? `${name} đã được gỡ chặn.`
+          : `${name} đã bị chặn. Người này sẽ không thể gửi tin nhắn tới bạn (mô phỏng).`,
+      );
+    } finally {
+      setIsBlocking(false);
+    }
+  };
+
+  const handleDeleteConversation = async () => {
+    if (!selectedConversationId || !onDeleteConversation) {
+      window.alert('Tính năng xoá chưa khả dụng.');
+      return;
+    }
+    const confirmed = window.confirm('Bạn có chắc muốn xoá hoàn toàn cuộc trò chuyện này?');
+    if (!confirmed) {
+      return;
+    }
+    setDeleteConversationPending(true);
+    try {
+      await onDeleteConversation(selectedConversationId);
+      setInfoPanelOpen(false);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Không thể xoá cuộc trò chuyện. Vui lòng thử lại.';
+      window.alert(message);
+    } finally {
+      setDeleteConversationPending(false);
+    }
+  };
+
+  const handleLeaveGroup = async (mode: 'silent' | 'block') => {
+    if (!selectedConversationId || !onLeaveConversation) {
+      window.alert('Tính năng rời nhóm chưa khả dụng.');
+      return;
+    }
+    const actionLabel =
+      mode === 'block' ? 'rời nhóm và chặn thêm lại nhóm này' : 'rời nhóm trong im lặng';
+    const confirmed = window.confirm(`Bạn có chắc muốn ${actionLabel}?`);
+    if (!confirmed) {
+      return;
+    }
+    setLeaveGroupPending(mode);
+    try {
+      await onLeaveConversation(selectedConversationId, { mode });
+      setInfoPanelOpen(false);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Không thể rời nhóm. Vui lòng thử lại.';
+      window.alert(message);
+    } finally {
+      setLeaveGroupPending(null);
     }
   };
 
@@ -430,17 +714,21 @@ export function ChatInterface({
           const hasError = Boolean(message.error);
           const seenSet = new Set((message.seenBy ?? []).map(String));
           const messageStatusLabel =
-            isCurrentUser && otherParticipantIds.length > 0
+            !message.isRecalled && isCurrentUser && otherParticipantIds.length > 0
               ? otherParticipantIds.every((id) => seenSet.has(id))
                 ? 'Đã xem'
                 : 'Đã gửi'
               : null;
           const messageStatusClass =
             messageStatusLabel === 'Đã xem' ? 'text-green-600' : 'text-slate-500';
+          const shouldHighlight = highlightMessageId === message.id;
+          const showRecallAction =
+            Boolean(onRecallMessage) && isCurrentUser && !message.isRecalled && !message.error;
 
           return (
             <div
               key={message.id}
+              data-message-id={message.id}
               className={`flex gap-2 ${isCurrentUser ? 'flex-row-reverse' : 'flex-row'}`}
             >
               {!isCurrentUser && (
@@ -469,9 +757,13 @@ export function ChatInterface({
                 <div
                   className={`chat-bubble ${
                     isCurrentUser ? 'chat-bubble--outgoing' : 'chat-bubble--incoming'
-                  } ${hasError ? 'border border-red-300 bg-red-50' : ''}`}
+                  } ${hasError ? 'border border-red-300 bg-red-50' : ''} ${
+                    shouldHighlight ? 'ring-2 ring-blue-200' : ''
+                  }`}
                 >
-                  {message.voiceRecording ? (
+                  {message.isRecalled ? (
+                    <p className="text-sm italic text-slate-500">Tin nhắn đã được thu hồi</p>
+                  ) : message.voiceRecording ? (
                     <div className="flex flex-col gap-2">
                       {message.voiceRecording.dataUrl || message.voiceRecording.url ? (
                         <audio
@@ -555,6 +847,16 @@ export function ChatInterface({
                   <span>
                     {timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
                   </span>
+                  {showRecallAction && (
+                    <button
+                      type="button"
+                      className="font-semibold text-blue-600 transition hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
+                      disabled={recallingMessageId === message.id}
+                      onClick={() => handleRecallMessage(message.id)}
+                    >
+                      {recallingMessageId === message.id ? 'Đang thu hồi...' : 'Thu hồi'}
+                    </button>
+                  )}
                   {isCurrentUser && messageStatusLabel && (
                     <span className={`font-medium ${messageStatusClass}`}>{messageStatusLabel}</span>
                   )}
@@ -570,7 +872,11 @@ export function ChatInterface({
   return (
     <div className="chat-interface">
       <div className="chat-interface__header">
-        <div className="flex flex-1 items-center gap-3">
+        <div
+          className={`flex w-full items-center ${
+            isMobile ? 'flex-wrap gap-3' : 'gap-6'
+          }`}
+        >
           {isMobile && (
             <Button
               variant="ghost"
@@ -585,7 +891,7 @@ export function ChatInterface({
           )}
           {isConversationSelected ? (
             <>
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
                 <Avatar className="size-12">
                   <AvatarFallback className="bg-blue-500 text-lg font-semibold text-white">
                     {conversationDisplay?.avatarFallback ??
@@ -594,7 +900,7 @@ export function ChatInterface({
                 </Avatar>
                 <div>
                   <h3 className="text-base font-semibold">
-                    {conversationDisplay?.title ?? 'Cuộc trò chuyện'}
+                    {nicknameDisplay || conversationDisplay?.title || 'Cuộc trò chuyện'}
                   </h3>
                   <p className={`flex items-center gap-1 text-sm ${statusClass}`}>
                     {!conversationDisplay?.isGroup && otherFriend?.isOnline && (
@@ -604,8 +910,133 @@ export function ChatInterface({
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" className="rounded-full">
+              <div
+                className={`flex items-center gap-2 ${
+                  isMobile ? 'w-full flex-wrap justify-end' : 'ml-auto'
+                }`}
+              >
+                <Popover
+                  open={searchPopoverOpen}
+                  onOpenChange={(open) => {
+                    setSearchPopoverOpen(open);
+                    if (open) {
+                      setTimeout(() => searchInputRef.current?.focus(), 0);
+                    }
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="rounded-full"
+                      disabled={searchDisabled}
+                      title="Tìm kiếm tin nhắn"
+                      aria-label="Tìm kiếm tin nhắn"
+                    >
+                      <Search className="size-5 text-blue-500" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80 bg-white p-4" align="end">
+                    <form className="space-y-2" onSubmit={handleSearchSubmit}>
+                      <Input
+                        ref={searchInputRef}
+                        type="text"
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        placeholder="Nhập nội dung cần tìm"
+                        disabled={searchDisabled}
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="submit"
+                          size="sm"
+                          className="rounded-full"
+                          disabled={searchingMessages || searchDisabled || !searchQuery.trim()}
+                        >
+                          {searchingMessages ? (
+                            <Loader2 className="mr-2 size-4 animate-spin" />
+                          ) : (
+                            <Search className="mr-2 size-4" />
+                          )}
+                          Tìm kiếm
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="rounded-full"
+                          onClick={handleSearchReset}
+                          disabled={searchingMessages}
+                        >
+                          Xóa
+                        </Button>
+                      </div>
+                    </form>
+                    {searchError && hasSearchedMessages && (
+                      <p className="mt-2 text-xs text-red-600">{searchError}</p>
+                    )}
+                    {!searchError && hasSearchedMessages && searchResults.length === 0 && (
+                      <p className="mt-2 text-xs text-slate-500">Không tìm thấy tin nhắn phù hợp.</p>
+                    )}
+                    {searchResults.length > 0 && (
+                      <div className="mt-3 max-h-64 space-y-2 overflow-auto pr-1">
+                        {searchResults.map((result) => {
+                          const snippet = result.isRecalled
+                            ? 'Tin nhắn đã được thu hồi'
+                            : result.content || 'Tin nhắn';
+                          const resultTime = new Date(result.createdAt).toLocaleString('vi-VN', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          });
+                          return (
+                            <button
+                              key={result.id}
+                              type="button"
+                              onClick={() => handleSelectSearchResult(result.id)}
+                              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+                            >
+                              <p className="font-semibold text-slate-900">{result.sender || 'Người dùng'}</p>
+                              <p className="text-xs text-slate-500">{resultTime}</p>
+                              <p className="mt-1 truncate text-sm text-slate-600">{snippet}</p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+                {canArchiveConversation && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full"
+                    title={
+                      isArchivedConversation ? 'Bỏ lưu trữ cuộc trò chuyện' : 'Lưu trữ cuộc trò chuyện'
+                    }
+                    aria-label={
+                      isArchivedConversation ? 'Bỏ lưu trữ cuộc trò chuyện' : 'Lưu trữ cuộc trò chuyện'
+                    }
+                    disabled={archivePending}
+                    onClick={handleToggleArchive}
+                  >
+                    {archivePending ? (
+                      <Loader2 className="size-4 animate-spin text-blue-500" />
+                    ) : isArchivedConversation ? (
+                      <ArchiveRestore className="size-5 text-blue-500" />
+                    ) : (
+                      <Archive className="size-5 text-blue-500" />
+                    )}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full"
+                  onClick={() => setInfoPanelOpen(true)}
+                  aria-label="Mở thông tin cuộc trò chuyện"
+                >
                   <Info className="size-5 text-blue-500" />
                 </Button>
               </div>
@@ -622,6 +1053,239 @@ export function ChatInterface({
         )}
         </div>
       </div>
+
+      <Sheet open={infoPanelOpen} onOpenChange={setInfoPanelOpen}>
+        <SheetContent
+          side="right"
+          className="flex h-full max-h-screen w-full max-w-full flex-col overflow-hidden p-0 sm:h-auto sm:max-w-md"
+        >
+          <SheetHeader className="border-b px-6 py-4 text-left">
+            <SheetTitle>Thông tin cuộc trò chuyện</SheetTitle>
+            <SheetDescription>
+              Quản lý người tham gia, nội dung và các tuỳ chọn bổ sung.
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="flex-1 min-h-0">
+            <div className="space-y-6 px-6 py-6">
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-3">
+                  <Avatar className="size-12">
+                    <AvatarFallback className="bg-blue-500 text-lg font-semibold text-white">
+                      {conversationDisplay?.avatarFallback ??
+                        getInitials(conversationDisplay?.title ?? 'Chat')}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="text-base font-semibold text-slate-900">
+                      {nicknameDisplay || conversationDisplay?.title || 'Cuộc trò chuyện'}
+                    </p>
+                    <p className="text-sm text-slate-500">{statusLabel || 'Đang hoạt động'}</p>
+                  </div>
+                </div>
+                {otherFriend && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Email: <span className="font-medium text-slate-700">{otherFriend.email}</span>
+                  </p>
+                )}
+              </section>
+
+              {conversationDisplay?.isGroup ? (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">Rời nhóm</h3>
+                  <p className="text-xs text-slate-500">
+                    Thoát khỏi nhóm theo cách bạn muốn. Rời trong im lặng sẽ không gửi thông báo;
+                    &quot;Rời và chặn&quot; sẽ chặn bạn được thêm lại (mô phỏng).
+                  </p>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-full"
+                      onClick={() => handleLeaveGroup('silent')}
+                      disabled={!onLeaveConversation || leaveGroupPending === 'silent'}
+                    >
+                      {leaveGroupPending === 'silent' ? (
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                      ) : null}
+                      Rời im lặng
+                    </Button>
+                    <Button
+                      type="button"
+                      className="rounded-full bg-red-600 text-white hover:bg-red-700"
+                      onClick={() => handleLeaveGroup('block')}
+                      disabled={!onLeaveConversation || leaveGroupPending === 'block'}
+                    >
+                      {leaveGroupPending === 'block' ? (
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                      ) : (
+                        <Shield className="mr-2 size-4" />
+                      )}
+                      Rời &amp; chặn
+                    </Button>
+                  </div>
+                </section>
+              ) : (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900">Chặn người dùng</h3>
+                      <p className="text-xs text-slate-500">
+                        {blockedUser
+                          ? 'Người dùng này đang bị chặn. Bạn sẽ không nhận tin nhắn (mô phỏng).'
+                          : 'Ngăn người này nhắn tin hoặc gọi cho bạn (mô phỏng).'}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant={blockedUser ? 'outline' : 'ghost'}
+                      className={blockedUser ? 'text-slate-700' : 'text-red-600'}
+                      onClick={handleToggleBlockUser}
+                      disabled={isBlocking}
+                    >
+                      {isBlocking ? (
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                      ) : (
+                        <Shield className="mr-2 size-4" />
+                      )}
+                      {blockedUser ? 'Gỡ chặn' : 'Chặn'}
+                    </Button>
+                  </div>
+                </section>
+              )}
+
+              <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <h3 className="text-sm font-semibold text-slate-900">Biệt danh</h3>
+                <p className="text-xs text-slate-500">
+                  Đặt tên riêng để dễ tìm kiếm cuộc trò chuyện này trên thiết bị của bạn.
+                </p>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    value={nicknameInput}
+                    onChange={(event) => setNicknameInput(event.target.value)}
+                    placeholder="Nhập biệt danh"
+                  />
+                  <Button type="button" onClick={handleSaveNickname}>
+                    Lưu
+                  </Button>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">File & phương tiện</h3>
+                  <span className="text-xs text-slate-500">{mediaMessages.length}</span>
+                </div>
+                {mediaMessages.length === 0 ? (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Chưa có file hoặc phương tiện nào trong cuộc trò chuyện này.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    {mediaMessages.map((message) => {
+                      const isImage = Boolean(message.image);
+                      const isFile = Boolean(message.file);
+                      const typeLabel = isImage
+                        ? 'Hình ảnh'
+                        : isFile
+                          ? 'Tệp đính kèm'
+                          : 'Ghi âm';
+                      const href =
+                        message.image?.url ??
+                        message.image?.dataUrl ??
+                        message.file?.url ??
+                        message.file?.dataUrl ??
+                        message.voiceRecording?.url ??
+                        message.voiceRecording?.dataUrl ??
+                        '#';
+                      const name =
+                        message.image?.originalName ||
+                        message.file?.originalName ||
+                        message.voiceRecording?.originalName ||
+                        typeLabel;
+                      return (
+                        <div
+                          key={message.id}
+                          className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                        >
+                          <div>
+                            <p className="font-semibold text-slate-900">{name}</p>
+                            <p className="text-xs text-slate-500">
+                              {typeLabel} • {formatDateTime(message.createdAt)}
+                            </p>
+                          </div>
+                          {href !== '#' && (
+                            <Button asChild variant="outline" size="sm" className="rounded-full">
+                              <a href={href} target="_blank" rel="noopener noreferrer">
+                                <Download className="mr-2 size-4" />
+                                Xem
+                              </a>
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">Liên kết</h3>
+                  <span className="text-xs text-slate-500">{linkMessages.length}</span>
+                </div>
+                {linkMessages.length === 0 ? (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Chưa có liên kết nào được chia sẻ.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {linkMessages.map((link) => (
+                      <div
+                        key={link.id}
+                        className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      >
+                        <div className="min-w-0 pr-3">
+                          <p className="truncate font-semibold text-slate-900">{link.url}</p>
+                          <p className="text-xs text-slate-500">
+                            {link.sender ?? 'Người dùng'} • {formatDateTime(link.createdAt)}
+                          </p>
+                        </div>
+                        <Button asChild variant="ghost" size="icon" className="text-blue-600">
+                          <a href={link.url} target="_blank" rel="noopener noreferrer">
+                            <LinkIcon className="size-4" />
+                          </a>
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <h3 className="text-sm font-semibold text-red-800">Xoá cuộc trò chuyện</h3>
+                <p className="text-xs text-red-700">
+                  Hành động này không thể hoàn tác. {conversationDisplay?.isGroup
+                    ? 'Bạn chỉ có thể xoá cuộc trò chuyện nhóm khi không còn thành viên nào khác.'
+                    : 'Tất cả tin nhắn sẽ bị xoá cho cả hai phía.'}
+                </p>
+                <Button
+                  type="button"
+                  className="mt-3 rounded-full bg-red-600 text-white hover:bg-red-700"
+                  onClick={handleDeleteConversation}
+                  disabled={!onDeleteConversation || deleteConversationPending}
+                >
+                  {deleteConversationPending ? (
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 size-4" />
+                  )}
+                  Xoá cuộc trò chuyện
+                </Button>
+              </section>
+            </div>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
 
       <ScrollArea ref={scrollAreaRef} className="chat-interface__messages h-full">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-4">

@@ -61,6 +61,17 @@ const messageSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    isRecalled: {
+      type: Boolean,
+      default: false,
+    },
+    recalledAt: {
+      type: Date,
+    },
+    recalledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
   },
   { timestamps: true }
 );

@@ -255,4 +255,53 @@ exports.cancelRequest = async (req, res) => {
   }
 };
 
+exports.removeFriend = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { friendId } = req.params || {};
+
+    if (!friendId) {
+      return res.status(400).json({ error: 'friendId is required' });
+    }
+
+    if (friendId === userId) {
+      return res.status(400).json({ error: 'Không thể xoá chính mình khỏi danh sách bạn bè' });
+    }
+
+    const [user, friend] = await Promise.all([
+      User.findById(userId).select('friends'),
+      User.findById(friendId).select('username email'),
+    ]);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!friend) {
+      return res.status(404).json({ error: 'Friend not found' });
+    }
+
+    const isFriend = (user.friends ?? []).some(
+      (existingId) => existingId?.toString?.() === friendId,
+    );
+
+    if (!isFriend) {
+      return res.status(400).json({ error: 'Người này không có trong danh sách bạn bè' });
+    }
+
+    await Promise.all([
+      User.findByIdAndUpdate(userId, { $pull: { friends: friendId } }),
+      User.findByIdAndUpdate(friendId, { $pull: { friends: userId } }),
+    ]);
+
+    return res.json({
+      message: 'Đã xoá bạn bè',
+      friend: normalizeUser(friend),
+    });
+  } catch (error) {
+    console.error('removeFriend error:', error);
+    return res.status(500).json({ error: 'Không thể xoá bạn bè' });
+  }
+};
+
 

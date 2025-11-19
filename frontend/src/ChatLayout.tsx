@@ -21,6 +21,8 @@ export interface ConversationPreview {
   unreadCount?: number;
   avatarFallback?: string;
   isGroup?: boolean;
+  isArchived?: boolean;
+  archivedAt?: string | null;
   participants?: Array<{
     id: string;
     username: string;
@@ -31,8 +33,12 @@ export interface ConversationPreview {
 
 export interface ChatLayoutProps {
   conversations: ConversationPreview[];
+  archivedConversations: ConversationPreview[];
   selectedConversationId?: string | null;
   onSelectConversation: (id: string) => void;
+  onArchiveConversation: (conversationId: string) => Promise<void>;
+  onUnarchiveConversation: (conversationId: string) => Promise<void>;
+  onRefreshArchived: () => Promise<void>;
   messages: ChatMessage[];
   loading: boolean;
   messagesError?: string | null;
@@ -51,6 +57,7 @@ export interface ChatLayoutProps {
   onAcceptFriendRequest: (requestId: string) => Promise<void>;
   onDeclineFriendRequest: (requestId: string) => Promise<void>;
   onCancelFriendRequest: (requestId: string) => Promise<void>;
+  onRemoveFriend: (friendId: string) => Promise<void>;
   searchResults: FriendSummary[];
   onSearchUsers: (query: string) => Promise<void>;
   searchingUsers: boolean;
@@ -67,12 +74,23 @@ export interface ChatLayoutProps {
   voiceRecordingReady?: boolean;
   onSendImage?: (file: File) => void | Promise<void>;
   onSendFile?: (file: File) => void | Promise<void>;
+  onRecallMessage?: (messageId: string) => Promise<void>;
+  onSearchMessages?: (conversationId: string, query: string) => Promise<ChatMessage[]>;
+  onDeleteConversation?: (conversationId: string) => Promise<void>;
+  onLeaveConversation?: (
+    conversationId: string,
+    options?: { mode?: 'silent' | 'block' },
+  ) => Promise<void>;
 }
 
 export function ChatLayout({
   conversations,
+  archivedConversations,
   selectedConversationId,
   onSelectConversation,
+  onArchiveConversation,
+  onUnarchiveConversation,
+  onRefreshArchived,
   messages,
   loading,
   onRetry,
@@ -90,6 +108,7 @@ export function ChatLayout({
   onAcceptFriendRequest,
   onDeclineFriendRequest,
   onCancelFriendRequest,
+  onRemoveFriend,
   searchResults,
   onSearchUsers,
   searchingUsers,
@@ -107,6 +126,10 @@ export function ChatLayout({
   voiceRecordingReady,
   onSendImage,
   onSendFile,
+  onRecallMessage,
+  onSearchMessages,
+  onDeleteConversation,
+  onLeaveConversation,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -122,8 +145,10 @@ export function ChatLayout({
   }, [isMobile, selectedConversationId, conversations.length]);
 
   const activeConversation = useMemo(
-    () => conversations.find((conversation) => conversation.id === selectedConversationId),
-    [conversations, selectedConversationId],
+    () =>
+      conversations.find((conversation) => conversation.id === selectedConversationId) ??
+      archivedConversations.find((conversation) => conversation.id === selectedConversationId),
+    [archivedConversations, conversations, selectedConversationId],
   );
 
   const handleSelectConversation = (id: string) => {
@@ -136,8 +161,12 @@ export function ChatLayout({
   const sidebar = (
     <ChatSidebar
       conversations={conversations}
+      archivedConversations={archivedConversations}
       selectedConversationId={selectedConversationId ?? null}
       onSelectConversation={handleSelectConversation}
+      onArchiveConversation={onArchiveConversation}
+      onUnarchiveConversation={onUnarchiveConversation}
+      onRefreshArchived={onRefreshArchived}
       friends={friends}
       incomingRequests={incomingRequests}
       outgoingRequests={outgoingRequests}
@@ -146,6 +175,7 @@ export function ChatLayout({
       onAcceptFriendRequest={onAcceptFriendRequest}
       onDeclineFriendRequest={onDeclineFriendRequest}
       onCancelFriendRequest={onCancelFriendRequest}
+      onRemoveFriend={onRemoveFriend}
       searchResults={searchResults}
       onSearch={onSearchUsers}
       searching={searchingUsers}
@@ -187,6 +217,12 @@ export function ChatLayout({
             onVoiceMessageSend={onVoiceMessageSend}
             onVoiceMessageCancel={onVoiceMessageCancel}
             voiceRecordingReady={voiceRecordingReady}
+            onArchiveConversation={onArchiveConversation}
+            onUnarchiveConversation={onUnarchiveConversation}
+            onRecallMessage={onRecallMessage}
+            onSearchMessages={onSearchMessages}
+            onDeleteConversation={onDeleteConversation}
+            onLeaveConversation={onLeaveConversation}
             isMobile
             onOpenSidebar={() => setMobileSidebarOpen(true)}
             onSendImage={onSendImage}
@@ -218,6 +254,12 @@ export function ChatLayout({
             voiceRecordingReady={voiceRecordingReady}
             onSendImage={onSendImage}
             onSendFile={onSendFile}
+            onArchiveConversation={onArchiveConversation}
+            onUnarchiveConversation={onUnarchiveConversation}
+            onRecallMessage={onRecallMessage}
+            onSearchMessages={onSearchMessages}
+            onDeleteConversation={onDeleteConversation}
+            onLeaveConversation={onLeaveConversation}
             friends={friends}
           />
         </>

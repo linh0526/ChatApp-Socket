@@ -5,6 +5,8 @@ const {
   createVoiceMessage,
   createImageMessage,
   createFileMessage,
+  recallMessage,
+  searchMessages,
   markMessagesSeen,
 } = require('../controllers/messageController');
 const auth = require('../middleware/auth');
@@ -29,12 +31,14 @@ const fileBodyParser = express.raw({
   limit: Number.isNaN(fileUploadLimit) ? 20 * 1024 * 1024 : fileUploadLimit,
 });
 
+router.get('/search', auth, searchMessages);
 router.get('/', auth, getMessages);
 router.post('/', auth, createMessage);
 router.post('/voice', auth, voiceBodyParser, createVoiceMessage);
 router.post('/image', auth, imageBodyParser, createImageMessage);
 router.post('/file', auth, fileBodyParser, createFileMessage);
 router.post('/seen', auth, markMessagesSeen);
+router.post('/:messageId/recall', auth, recallMessage);
 
 // Debug route to verify registration
 console.log('[messageRoutes] Routes registered:');

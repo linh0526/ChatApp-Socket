@@ -19,6 +19,12 @@ const emitNewMessage = (message) => {
   }
 };
 
+const emitMessageUpdated = (message) => {
+  if (ioInstance) {
+    ioInstance.emit('message:updated', message);
+  }
+};
+
 const mapObjectIdsToStrings = (items) => {
   if (!Array.isArray(items)) {
     return [];
@@ -51,6 +57,28 @@ const enrichMessageForClient = (message) => {
   payload.seenBy = mapObjectIdsToStrings(payload.seenBy);
 
   return payload;
+};
+
+const formatMessageForClient = (message, { decryptedContent } = {}) => {
+  if (!message) {
+    return null;
+  }
+  const plain =
+    typeof message.toObject === 'function' ? message.toObject() : { ...message };
+  if (typeof decryptedContent === 'string') {
+    plain.content = decryptedContent;
+  } else {
+    try {
+      plain.content = decryptText(plain.content);
+    } catch (error) {
+      console.error('Failed to decrypt message content:', error);
+      plain.content = '';
+    }
+  }
+  plain.voiceRecording = sanitizeVoiceRecording(plain.voiceRecording);
+  plain.image = sanitizeImage(plain.image);
+  plain.file = sanitizeFileAttachment(plain.file);
+  return enrichMessageForClient(plain);
 };
 
 const broadcastMessagesSeen = (conversationId, viewerId, messageIds) => {
@@ -128,6 +156,7 @@ const markMessagesAsSeen = async ({
 const VOICE_PLACEHOLDER_CONTENT = 'Tin nhắn thoại';
 const IMAGE_PLACEHOLDER_CONTENT = 'Hình ảnh';
 const FILE_PLACEHOLDER_CONTENT = 'Tệp đính kèm';
+const RECALL_PLACEHOLDER_CONTENT = 'Tin nhắn đã được thu hồi';
 
 const buildUploadUrl = (url, relativePath) => {
   if (typeof url === 'string' && url.trim()) {
@@ -265,6 +294,15 @@ const sanitizeFileAttachment = (file) => {
   };
 };
 
+const clearMessageAttachments = (message) => {
+  if (!message || typeof message.set !== 'function') {
+    return;
+  }
+  message.set('voiceRecording', undefined);
+  message.set('image', undefined);
+  message.set('file', undefined);
+};
+
 const createMessageDocument = async ({
   senderId,
   sender,
@@ -359,16 +397,7 @@ const createMessageDocument = async ({
     await conversation.save();
   }
 
-  const plainMessage = message.toObject();
-  plainMessage.content = trimmedContent;
-  const sanitizedVoiceRecording = sanitizeVoiceRecording(plainMessage.voiceRecording);
-  plainMessage.voiceRecording =
-    sanitizedVoiceRecording ?? sanitizeVoiceRecording(voiceRecording) ?? undefined;
-  const sanitizedImage = sanitizeImage(plainMessage.image);
-  plainMessage.image = sanitizedImage ?? sanitizeImage(image) ?? undefined;
-  const sanitizedFile = sanitizeFileAttachment(plainMessage.file);
-  plainMessage.file = sanitizedFile ?? sanitizeFileAttachment(fileAttachment) ?? undefined;
-  const enrichedMessage = enrichMessageForClient(plainMessage);
+  const enrichedMessage = formatMessageForClient(message, { decryptedContent: trimmedContent });
 
   emitNewMessage(enrichedMessage);
   return enrichedMessage;
@@ -393,18 +422,9 @@ const getMessages = async (req, res) => {
 
     const filter = conversationId ? { conversation: conversationId } : { conversation: null };
     const messages = await Message.find(filter).sort({ createdAt: 1 });
-    const decryptedMessages = messages.map((message) => {
-      const plain = message.toObject();
-      try {
-        plain.content = decryptText(plain.content);
-      } catch (error) {
-        console.error('Failed to decrypt message content:', error);
-        plain.content = '';
-      }
-      plain.voiceRecording = sanitizeVoiceRecording(plain.voiceRecording);
-      plain.image = sanitizeImage(plain.image);
-      return enrichMessageForClient(plain);
-    });
+    const decryptedMessages = messages
+      .map((message) => formatMessageForClient(message))
+      .filter(Boolean);
 
     if (conversationId) {
       await markMessagesAsSeen({
@@ -507,24 +527,11 @@ const registerSocketHandlers = (socket) => {
       }
 
       const filter = conversationId ? { conversation: conversationId } : { conversation: null };
-      const messages = await Message.find(filter).sort({ createdAt: 1 }).lean();
+      const messages = await Message.find(filter).sort({ createdAt: 1 });
 
-      const serialized = messages.map((message) => {
-        let decryptedContent = '';
-        try {
-          decryptedContent = decryptText(message.content);
-        } catch (error) {
-          console.error('Failed to decrypt message content:', error);
-        }
-
-        const formatted = {
-          ...message,
-          content: decryptedContent,
-          voiceRecording: sanitizeVoiceRecording(message.voiceRecording),
-          image: sanitizeImage(message.image),
-        };
-        return enrichMessageForClient(formatted);
-      });
+      const serialized = messages
+        .map((message) => formatMessageForClient(message))
+        .filter(Boolean);
 
       if (conversationId) {
         await markMessagesAsSeen({
@@ -894,6 +901,134 @@ const createFileMessage = async (req, res) => {
   }
 };
 
+const recallMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params || {};
+    if (!messageId) {
+      return res.status(400).json({ error: 'messageId is required' });
+    }
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ error: 'Không tìm thấy tin nhắn' });
+    }
+
+    const userId = req.user.id;
+    const normalizedUsername = (req.user.username || '').toLowerCase();
+
+    const isSender =
+      (message.senderId && message.senderId.toString() === userId) ||
+      (!message.senderId &&
+        normalizedUsername &&
+        typeof message.sender === 'string' &&
+        message.sender.toLowerCase() === normalizedUsername);
+
+    if (!isSender) {
+      return res.status(403).json({ error: 'Bạn chỉ có thể thu hồi tin nhắn của chính mình' });
+    }
+
+    let updated = false;
+    if (!message.isRecalled) {
+      message.content = encryptText(RECALL_PLACEHOLDER_CONTENT);
+      message.messageType = 'text';
+      clearMessageAttachments(message);
+      message.isRecalled = true;
+      message.recalledAt = new Date();
+      message.recalledBy = userId;
+      await message.save();
+      updated = true;
+    }
+
+    const formatted = formatMessageForClient(message, {
+      decryptedContent: RECALL_PLACEHOLDER_CONTENT,
+    });
+
+    if (updated && formatted) {
+      emitMessageUpdated(formatted);
+    }
+
+    return res.json(formatted);
+  } catch (error) {
+    console.error('recallMessage error:', error);
+    return res.status(500).json({ error: 'Không thể thu hồi tin nhắn' });
+  }
+};
+
+const searchMessages = async (req, res) => {
+  try {
+    const { conversationId, query = '', limit } = req.query || {};
+    const trimmedQuery = String(query || '').trim();
+
+    if (!conversationId) {
+      return res.status(400).json({ error: 'conversationId is required' });
+    }
+    if (!trimmedQuery) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+
+    const conversation = await Conversation.findById(conversationId).select('participants');
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const userId = req.user.id;
+    const isParticipant = conversation.participants.some(
+      (participant) => participant?.toString?.() === userId
+    );
+    if (!isParticipant) {
+      return res.status(403).json({ error: 'Không có quyền truy cập cuộc trò chuyện' });
+    }
+
+    const limitValue = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const normalizedQuery = trimmedQuery.toLowerCase();
+
+    const candidates = await Message.find({ conversation: conversationId })
+      .sort({ createdAt: -1 })
+      .limit(500);
+
+    const matches = [];
+    for (const message of candidates) {
+      if (message.isRecalled) {
+        continue;
+      }
+      let decryptedContent = '';
+      try {
+        decryptedContent = decryptText(message.content);
+      } catch (error) {
+        decryptedContent = '';
+      }
+
+      const attachmentNames = [
+        message.voiceRecording?.originalName,
+        message.image?.originalName,
+        message.file?.originalName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      const haystack = `${decryptedContent} ${attachmentNames}`.toLowerCase();
+      if (!haystack.includes(normalizedQuery)) {
+        continue;
+      }
+
+      const formatted = formatMessageForClient(message, { decryptedContent });
+      if (formatted) {
+        matches.push(formatted);
+      }
+
+      if (matches.length >= limitValue) {
+        break;
+      }
+    }
+
+    return res.json(matches);
+  } catch (error) {
+    console.error('searchMessages error:', error);
+    return res.status(500).json({ error: 'Không thể tìm kiếm tin nhắn' });
+  }
+};
+
 const markMessagesSeenController = async (req, res) => {
   try {
     const { conversationId, messageIds } = req.body || {};
@@ -934,6 +1069,8 @@ module.exports = {
   createVoiceMessage,
   createImageMessage,
   createFileMessage,
+  recallMessage,
+  searchMessages,
   registerSocketHandlers,
   setSocketIO,
   getOnlineUserIds,
