@@ -6,6 +6,7 @@ const mime = require('mime-types');
 
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
 const voiceRoot = path.join(uploadsRoot, 'voice');
+const imageRoot = path.join(uploadsRoot, 'images');
 
 const ensureDirSync = (dirPath) => {
   if (!fs.existsSync(dirPath)) {
@@ -15,24 +16,25 @@ const ensureDirSync = (dirPath) => {
 
 ensureDirSync(uploadsRoot);
 ensureDirSync(voiceRoot);
+ensureDirSync(imageRoot);
 
 const normalizeSegment = (segment) =>
   String(segment || '')
     .trim()
     .replace(/[^a-zA-Z0-9-_]/g, '_') || 'anonymous';
 
-const storeVoiceRecording = async ({ buffer, mimeType, originalName, userId }) => {
+const storeBinaryAsset = async ({ rootDir, userId, buffer, mimeType, originalName, fallbackExt }) => {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
-    throw new Error('Invalid audio buffer provided');
+    throw new Error('Invalid binary buffer provided');
   }
 
-  const safeUserId = normalizeSegment(userId);
-  const userDir = path.join(voiceRoot, safeUserId);
+  const safeUserId = normalizeSegment(userId || 'anonymous');
+  const userDir = path.join(rootDir, safeUserId);
   ensureDirSync(userDir);
 
   const extensionFromMime = mime.extension(mimeType || '') || null;
   const extensionFromName = originalName ? path.extname(originalName).replace(/^\./, '') : null;
-  const extension = extensionFromMime || extensionFromName || 'webm';
+  const extension = extensionFromMime || extensionFromName || fallbackExt || 'bin';
   const safeExtension = extension.startsWith('.') ? extension.slice(1) : extension;
 
   const fileName = `${Date.now()}-${randomUUID()}.${safeExtension}`;
@@ -40,14 +42,14 @@ const storeVoiceRecording = async ({ buffer, mimeType, originalName, userId }) =
   await fsPromises.writeFile(absolutePath, buffer);
 
   const relativePath = path
-    .join('voice', safeUserId, fileName)
+    .join(path.basename(rootDir), safeUserId, fileName)
     .split(path.sep)
     .join('/');
 
   return {
     fileName,
     originalName: originalName || fileName,
-    mimeType: mimeType || 'audio/webm',
+    mimeType,
     size: buffer.length,
     storagePath: absolutePath,
     relativePath,
@@ -55,10 +57,46 @@ const storeVoiceRecording = async ({ buffer, mimeType, originalName, userId }) =
   };
 };
 
+const storeVoiceRecording = async ({ buffer, mimeType, originalName, userId }) => {
+  const stored = await storeBinaryAsset({
+    rootDir: voiceRoot,
+    userId,
+    buffer,
+    mimeType: mimeType || 'audio/webm',
+    originalName,
+    fallbackExt: 'webm',
+  });
+
+  if (!stored.mimeType) {
+    stored.mimeType = 'audio/webm';
+  }
+
+  return stored;
+};
+
+const storeImageFile = async ({ buffer, mimeType, originalName, userId }) => {
+  const stored = await storeBinaryAsset({
+    rootDir: imageRoot,
+    userId,
+    buffer,
+    mimeType: mimeType || 'image/jpeg',
+    originalName,
+    fallbackExt: 'jpg',
+  });
+
+  if (!stored.mimeType) {
+    stored.mimeType = 'image/jpeg';
+  }
+
+  return stored;
+};
+
 module.exports = {
   uploadsRoot,
   voiceRoot,
+  imageRoot,
   ensureDirSync,
   storeVoiceRecording,
+  storeImageFile,
 };
 

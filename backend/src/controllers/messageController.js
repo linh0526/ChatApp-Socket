@@ -1,6 +1,7 @@
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
 const { encryptText, decryptText } = require('../utils/encryption');
+const { storeVoiceRecording, storeImageFile } = require('../utils/storage');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
@@ -21,6 +22,17 @@ const emitNewMessage = (message) => {
 const VOICE_PLACEHOLDER_CONTENT = 'Tin nhắn thoại';
 const IMAGE_PLACEHOLDER_CONTENT = 'Hình ảnh';
 
+const buildUploadUrl = (url, relativePath) => {
+  if (typeof url === 'string' && url.trim()) {
+    return url.trim();
+  }
+  if (typeof relativePath === 'string' && relativePath.trim()) {
+    const normalized = relativePath.replace(/^[./\\]+/, '').split('\\').join('/');
+    return `/uploads/${normalized}`;
+  }
+  return null;
+};
+
 const sanitizeVoiceRecording = (voiceRecording) => {
   if (!voiceRecording) {
     return undefined;
@@ -29,9 +41,10 @@ const sanitizeVoiceRecording = (voiceRecording) => {
   const source = typeof voiceRecording.toObject === 'function' ? voiceRecording.toObject() : voiceRecording;
 
   // Backward compatibility: older records stored URL-based metadata
-  if (source.url) {
+  const resolvedUrl = buildUploadUrl(source.url, source.relativePath);
+  if (resolvedUrl) {
     return {
-      url: source.url,
+      url: resolvedUrl,
       mimeType: source.mimeType || 'audio/webm',
       originalName: source.originalName,
       size: source.size,
@@ -70,9 +83,10 @@ const sanitizeImage = (image) => {
   const source = typeof image.toObject === 'function' ? image.toObject() : image;
 
   // Backward compatibility: older records stored URL-based metadata
-  if (source.url) {
+  const resolvedUrl = buildUploadUrl(source.url, source.relativePath);
+  if (resolvedUrl) {
     return {
-      url: source.url,
+      url: resolvedUrl,
       mimeType: source.mimeType || 'image/jpeg',
       originalName: source.originalName,
       size: source.size,
@@ -617,12 +631,23 @@ const createVoiceMessage = async (req, res) => {
       : originalNameHeader;
 
     const audioBuffer = Buffer.from(req.body);
-    const storedRecording = {
-      data: audioBuffer,
-      mimeType: contentType === 'application/octet-stream' ? 'audio/webm' : contentType,
-      size: audioBuffer.length,
-      originalName: originalName || `voice-message-${Date.now()}.webm`,
-    };
+    let storedRecording = null;
+    try {
+      storedRecording = await storeVoiceRecording({
+        buffer: audioBuffer,
+        mimeType: contentType === 'application/octet-stream' ? 'audio/webm' : contentType,
+        originalName: originalName || `voice-message-${Date.now()}.webm`,
+        userId: senderId || 'anonymous',
+      });
+    } catch (storageError) {
+      console.error('Failed to store voice recording on disk, falling back to inline buffer:', storageError);
+      storedRecording = {
+        data: audioBuffer,
+        mimeType: contentType === 'application/octet-stream' ? 'audio/webm' : contentType,
+        size: audioBuffer.length,
+        originalName: originalName || `voice-message-${Date.now()}.webm`,
+      };
+    }
 
     const message = await createMessageDocument({
       senderId,
@@ -687,12 +712,30 @@ const createImageMessage = async (req, res) => {
       : originalNameHeader;
 
     const imageBuffer = Buffer.from(req.body);
-    const storedImage = {
-      data: imageBuffer,
-      mimeType: contentType === 'application/octet-stream' ? 'image/jpeg' : contentType,
-      size: imageBuffer.length,
-      originalName: originalName || `image-${Date.now()}.jpg`,
-    };
+    let storedImage = null;
+    try {
+      const stored = await storeImageFile({
+        buffer: imageBuffer,
+        mimeType: contentType === 'application/octet-stream' ? 'image/jpeg' : contentType,
+        originalName: originalName || `image-${Date.now()}.jpg`,
+        userId: senderId || 'anonymous',
+      });
+      storedImage = {
+        mimeType: stored.mimeType,
+        size: stored.size,
+        originalName: stored.originalName,
+        relativePath: stored.relativePath,
+        url: stored.url,
+      };
+    } catch (storageError) {
+      console.error('Failed to store image on disk, falling back to inline buffer:', storageError);
+      storedImage = {
+        data: imageBuffer,
+        mimeType: contentType === 'application/octet-stream' ? 'image/jpeg' : contentType,
+        size: imageBuffer.length,
+        originalName: originalName || `image-${Date.now()}.jpg`,
+      };
+    }
 
     const message = await createMessageDocument({
       senderId,

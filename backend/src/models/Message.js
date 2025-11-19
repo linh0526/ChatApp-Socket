@@ -29,12 +29,16 @@ const messageSchema = new mongoose.Schema(
       size: { type: Number },
       originalName: { type: String },
       durationMs: { type: Number },
+      relativePath: { type: String },
+      url: { type: String },
     },
     image: {
       data: { type: Buffer },
       mimeType: { type: String },
       size: { type: Number },
       originalName: { type: String },
+      relativePath: { type: String },
+      url: { type: String },
     },
   },
   { timestamps: true }
