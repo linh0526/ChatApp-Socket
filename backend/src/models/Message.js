@@ -7,6 +7,10 @@ const messageSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    senderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
     content: {
       type: String,
       required: function requiredContent() {
@@ -39,6 +43,15 @@ const messageSchema = new mongoose.Schema(
       originalName: { type: String },
       relativePath: { type: String },
       url: { type: String },
+    },
+    seenBy: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+        },
+      ],
+      default: [],
     },
   },
   { timestamps: true }

@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { ScrollArea } from './ui/scroll-area';
 import type { ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
+import type { FriendSummary } from './friendTypes';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
 interface ChatInterfaceProps {
@@ -15,6 +16,7 @@ interface ChatInterfaceProps {
   messages: ChatMessage[];
   messagesError?: string | null;
   currentUserName?: string | null;
+  currentUserId?: string | null;
   inputValue: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -32,6 +34,7 @@ interface ChatInterfaceProps {
   onVideoCall?: () => void;
   onAudioCall?: () => void;
   onSendImage?: (file: File) => void | Promise<void>;
+  friends: FriendSummary[];
 }
 
 const getInitials = (text: string) =>
@@ -49,6 +52,7 @@ export function ChatInterface({
   messages,
   messagesError,
   currentUserName,
+  currentUserId,
   inputValue,
   onInputChange,
   onSend,
@@ -66,6 +70,7 @@ export function ChatInterface({
   onVideoCall,
   onAudioCall,
   onSendImage,
+  friends = [],
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
@@ -86,6 +91,64 @@ export function ChatInterface({
       participants: [],
     };
   }, [conversation, selectedConversationId]);
+
+  const otherParticipant = useMemo(() => {
+    if (!conversationDisplay?.participants || conversationDisplay.participants.length === 0) {
+      return null;
+    }
+    if (!currentUserId) {
+      return conversationDisplay.participants[0] ?? null;
+    }
+    return (
+      conversationDisplay.participants.find((participant) => participant.id && participant.id !== currentUserId) ??
+      null
+    );
+  }, [conversationDisplay?.participants, currentUserId]);
+
+  const otherFriend = useMemo(
+    () => friends.find((friend) => friend.id === otherParticipant?.id),
+    [friends, otherParticipant?.id],
+  );
+
+  const statusLabel = useMemo(() => {
+    if (!conversationDisplay) {
+      return '';
+    }
+    if (conversationDisplay.isGroup) {
+      return (
+        conversationDisplay.subtitle ??
+        `${conversationDisplay.participants?.length ?? 0} thành viên`
+      );
+    }
+    if (otherFriend?.isOnline === true) {
+      return 'Đang trực tuyến';
+    }
+    if (otherFriend?.isOnline === false) {
+      return 'Ngoại tuyến';
+    }
+    return conversationDisplay.subtitle ?? 'Trò chuyện trực tiếp';
+  }, [conversationDisplay, otherFriend]);
+
+  const statusClass = useMemo(() => {
+    if (conversationDisplay?.isGroup) {
+      return 'text-slate-500';
+    }
+    if (otherFriend?.isOnline) {
+      return 'text-green-600';
+    }
+    return 'text-slate-500';
+  }, [conversationDisplay?.isGroup, otherFriend]);
+
+  const otherParticipantIds = useMemo(() => {
+    const ids =
+      conversationDisplay?.participants
+        ?.map((participant) => participant.id)
+        .filter((id): id is string => Boolean(id)) ?? [];
+    if (!currentUserId) {
+      return ids;
+    }
+    return ids.filter((id) => id !== currentUserId);
+  }, [conversationDisplay?.participants, currentUserId]);
 
   const participantLookup = useMemo(() => {
     const map = new Map<string, NonNullable<ConversationPreview['participants']>[number]>();
@@ -317,10 +380,22 @@ export function ChatInterface({
           const displayName = participant?.username || senderName;
           const avatarUrl = participant?.avatarUrl ?? null;
           const avatarInitials = getInitials(displayName);
+          const normalizedSenderName = message.sender?.toLowerCase();
+          const normalizedCurrentUserName = currentUserName?.toLowerCase();
           const isCurrentUser =
-            currentUserName && message.sender?.toLowerCase() === currentUserName.toLowerCase();
+            (currentUserId && message.senderId && message.senderId === currentUserId) ||
+            (normalizedCurrentUserName && normalizedSenderName === normalizedCurrentUserName);
           const timestamp = new Date(message.createdAt);
           const hasError = Boolean(message.error);
+          const seenSet = new Set((message.seenBy ?? []).map(String));
+          const messageStatusLabel =
+            isCurrentUser && otherParticipantIds.length > 0
+              ? otherParticipantIds.every((id) => seenSet.has(id))
+                ? 'Đã xem'
+                : 'Đã gửi'
+              : null;
+          const messageStatusClass =
+            messageStatusLabel === 'Đã xem' ? 'text-green-600' : 'text-slate-500';
 
           return (
             <div
@@ -404,9 +479,14 @@ export function ChatInterface({
                     <p className="mt-1 text-xs text-red-600">{message.error}</p>
                   )}
                 </div>
-                <span className="mt-1 text-xs text-slate-400">
-                  {timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-                </span>
+                <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
+                  <span>
+                    {timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {isCurrentUser && messageStatusLabel && (
+                    <span className={`font-medium ${messageStatusClass}`}>{messageStatusLabel}</span>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -444,8 +524,11 @@ export function ChatInterface({
                   <h3 className="text-base font-semibold">
                     {conversationDisplay?.title ?? 'Cuộc trò chuyện'}
                   </h3>
-                  <p className="text-sm text-slate-500">
-                    {conversationDisplay?.subtitle ?? 'Đang hoạt động'}
+                  <p className={`flex items-center gap-1 text-sm ${statusClass}`}>
+                    {!conversationDisplay?.isGroup && otherFriend?.isOnline && (
+                      <span className="inline-block size-2 rounded-full bg-green-500" />
+                    )}
+                    {statusLabel || 'Đang hoạt động'}
                   </p>
                 </div>
               </div>

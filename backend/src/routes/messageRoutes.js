@@ -4,6 +4,7 @@ const {
   createMessage,
   createVoiceMessage,
   createImageMessage,
+  markMessagesSeen,
 } = require('../controllers/messageController');
 const auth = require('../middleware/auth');
 
@@ -25,6 +26,7 @@ router.get('/', auth, getMessages);
 router.post('/', auth, createMessage);
 router.post('/voice', auth, voiceBodyParser, createVoiceMessage);
 router.post('/image', auth, imageBodyParser, createImageMessage);
+router.post('/seen', auth, markMessagesSeen);
 
 // Debug route to verify registration
 console.log('[messageRoutes] Routes registered:');
@@ -32,6 +34,7 @@ console.log('  GET  /api/messages');
 console.log('  POST /api/messages');
 console.log('  POST /api/messages/voice');
 console.log('  POST /api/messages/image');
+console.log('  POST /api/messages/seen');
 
 module.exports = router;
 

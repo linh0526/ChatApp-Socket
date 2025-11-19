@@ -19,6 +19,112 @@ const emitNewMessage = (message) => {
   }
 };
 
+const mapObjectIdsToStrings = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') return item;
+      if (typeof item.toString === 'function') return item.toString();
+      return String(item);
+    })
+    .filter(Boolean);
+};
+
+const enrichMessageForClient = (message) => {
+  if (!message) {
+    return message;
+  }
+  const payload = typeof message.toObject === 'function' ? message.toObject() : { ...message };
+
+  if (payload._id && typeof payload._id !== 'string') {
+    payload._id = payload._id.toString();
+  }
+  if (payload.conversation && typeof payload.conversation !== 'string') {
+    payload.conversation = payload.conversation.toString();
+  }
+  if (payload.senderId && typeof payload.senderId !== 'string') {
+    payload.senderId = payload.senderId.toString();
+  }
+  payload.seenBy = mapObjectIdsToStrings(payload.seenBy);
+
+  return payload;
+};
+
+const broadcastMessagesSeen = (conversationId, viewerId, messageIds) => {
+  if (!ioInstance || !conversationId || !Array.isArray(messageIds) || messageIds.length === 0) {
+    return;
+  }
+  ioInstance.emit('message:seen', {
+    conversationId: conversationId.toString(),
+    viewerId,
+    messageIds,
+  });
+};
+
+const markMessagesAsSeen = async ({
+  conversationId,
+  viewerId,
+  viewerUsername,
+  messageIds = [],
+  emitEvent = true,
+}) => {
+  if (!conversationId || !viewerId) {
+    return [];
+  }
+
+  const normalizedIds = Array.isArray(messageIds)
+    ? messageIds
+        .map((id) => (typeof id === 'string' ? id.trim() : null))
+        .filter(Boolean)
+    : [];
+
+  const baseFilter = {
+    conversation: conversationId,
+    seenBy: { $ne: viewerId },
+    $and: [
+      {
+        $or: [
+          { senderId: { $exists: false } },
+          { senderId: { $ne: viewerId } },
+        ],
+      },
+    ],
+  };
+
+  if (viewerUsername) {
+    baseFilter.$and.push({
+      $or: [
+        { sender: { $exists: false } },
+        { sender: { $ne: viewerUsername } },
+      ],
+    });
+  }
+
+  if (normalizedIds.length > 0) {
+    baseFilter._id = { $in: normalizedIds };
+  }
+
+  const targetMessages = await Message.find(baseFilter).select('_id').lean();
+  if (targetMessages.length === 0) {
+    return [];
+  }
+
+  const ids = targetMessages.map((msg) => msg._id.toString());
+  await Message.updateMany(
+    { _id: { $in: targetMessages.map((msg) => msg._id) } },
+    { $addToSet: { seenBy: viewerId } }
+  );
+
+  if (emitEvent) {
+    broadcastMessagesSeen(conversationId, viewerId, ids);
+  }
+
+  return ids;
+};
+
 const VOICE_PLACEHOLDER_CONTENT = 'Tin nhắn thoại';
 const IMAGE_PLACEHOLDER_CONTENT = 'Hình ảnh';
 
@@ -187,6 +293,7 @@ const createMessageDocument = async ({
 
   const message = await Message.create({
     sender: trimmedSender,
+    senderId: senderId || undefined,
     content: encryptedContent,
     messageType: normalizedType,
     voiceRecording: normalizedType === 'voice' ? voiceRecording : undefined,
@@ -206,9 +313,10 @@ const createMessageDocument = async ({
     sanitizedVoiceRecording ?? sanitizeVoiceRecording(voiceRecording) ?? undefined;
   const sanitizedImage = sanitizeImage(plainMessage.image);
   plainMessage.image = sanitizedImage ?? sanitizeImage(image) ?? undefined;
+  const enrichedMessage = enrichMessageForClient(plainMessage);
 
-  emitNewMessage(plainMessage);
-  return plainMessage;
+  emitNewMessage(enrichedMessage);
+  return enrichedMessage;
 };
 
 const getMessages = async (req, res) => {
@@ -240,8 +348,16 @@ const getMessages = async (req, res) => {
       }
       plain.voiceRecording = sanitizeVoiceRecording(plain.voiceRecording);
       plain.image = sanitizeImage(plain.image);
-      return plain;
+      return enrichMessageForClient(plain);
     });
+
+    if (conversationId) {
+      await markMessagesAsSeen({
+        conversationId,
+        viewerId: req.user.id,
+        viewerUsername: req.user.username,
+      });
+    }
 
     res.json(decryptedMessages);
   } catch (error) {
@@ -346,23 +462,22 @@ const registerSocketHandlers = (socket) => {
           console.error('Failed to decrypt message content:', error);
         }
 
-        return {
+        const formatted = {
           ...message,
           content: decryptedContent,
           voiceRecording: sanitizeVoiceRecording(message.voiceRecording),
           image: sanitizeImage(message.image),
-          _id: message._id?.toString?.() ?? message._id,
-          conversation: message.conversation?.toString?.(),
-          createdAt:
-            message.createdAt instanceof Date
-              ? message.createdAt.toISOString()
-              : message.createdAt,
-          updatedAt:
-            message.updatedAt instanceof Date
-              ? message.updatedAt.toISOString()
-              : message.updatedAt,
         };
+        return enrichMessageForClient(formatted);
       });
+
+      if (conversationId) {
+        await markMessagesAsSeen({
+          conversationId,
+          viewerId: userId,
+          viewerUsername: username,
+        });
+      }
 
       if (typeof callback === 'function') {
         callback({ status: 'ok', data: serialized });
@@ -416,6 +531,69 @@ const registerSocketHandlers = (socket) => {
 
       if (!error.statusCode || error.statusCode >= 500) {
         console.error('Error handling socket message:', error);
+      }
+    }
+  });
+
+  socket.on('message:mark-seen', async (payload, callback) => {
+    try {
+      const { token, conversationId, messageIds } = payload ?? {};
+      if (!token) {
+        const error = new Error('Authentication token is required');
+        error.statusCode = 401;
+        throw error;
+      }
+      if (!conversationId) {
+        const error = new Error('conversationId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.id;
+
+      const conversation = await Conversation.findById(conversationId).select('participants');
+      if (!conversation) {
+        const error = new Error('Conversation not found');
+        error.statusCode = 404;
+        throw error;
+      }
+      const isParticipant = conversation.participants.some(
+        (participant) => participant?.toString?.() === userId
+      );
+      if (!isParticipant) {
+        const error = new Error('Không có quyền truy cập cuộc trò chuyện');
+        error.statusCode = 403;
+        throw error;
+      }
+
+      const updatedMessageIds = await markMessagesAsSeen({
+        conversationId,
+        viewerId: userId,
+        viewerUsername: decoded.username,
+        messageIds,
+      });
+
+      if (typeof callback === 'function') {
+        callback({ status: 'ok', data: { updatedMessageIds } });
+      }
+    } catch (error) {
+      if (typeof callback === 'function') {
+        callback({
+          status: 'error',
+          error:
+            error.statusCode === 400 ||
+            error.statusCode === 401 ||
+            error.statusCode === 403 ||
+            error.statusCode === 404 ||
+            error.name === 'JsonWebTokenError'
+              ? error.message
+              : 'Không thể cập nhật trạng thái tin nhắn',
+        });
+      }
+
+      if (!error.statusCode || error.statusCode >= 500) {
+        console.error('Error handling socket message:mark-seen:', error);
       }
     }
   });
@@ -762,6 +940,40 @@ const createImageMessage = async (req, res) => {
   }
 };
 
+const markMessagesSeenController = async (req, res) => {
+  try {
+    const { conversationId, messageIds } = req.body || {};
+    if (!conversationId) {
+      return res.status(400).json({ error: 'conversationId is required' });
+    }
+
+    const conversation = await Conversation.findById(conversationId).select('participants');
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const viewerId = req.user.id;
+    const isParticipant = conversation.participants.some(
+      (participant) => participant?.toString?.() === viewerId
+    );
+    if (!isParticipant) {
+      return res.status(403).json({ error: 'Không có quyền truy cập cuộc trò chuyện' });
+    }
+
+    const updatedMessageIds = await markMessagesAsSeen({
+      conversationId,
+      viewerId,
+      viewerUsername: req.user.username,
+      messageIds,
+    });
+
+    return res.json({ updatedMessageIds });
+  } catch (error) {
+    console.error('markMessagesSeen error:', error);
+    return res.status(500).json({ error: 'Không thể cập nhật trạng thái tin nhắn' });
+  }
+};
+
 module.exports = {
   getMessages,
   createMessage,
@@ -771,5 +983,6 @@ module.exports = {
   setSocketIO,
   getOnlineUserIds,
   isUserOnline,
+  markMessagesSeen: markMessagesSeenController,
 };
 

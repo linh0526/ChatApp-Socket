@@ -19,6 +19,7 @@ export interface ImagePayload {
 export interface ChatMessage {
   id: string;
   sender: string;
+  senderId?: string | null;
   content: string;
   createdAt: string;
   error?: string;
@@ -26,5 +27,6 @@ export interface ChatMessage {
   messageType?: 'text' | 'voice' | 'image';
   voiceRecording?: VoiceRecordingPayload | null;
   image?: ImagePayload | null;
+  seenBy?: string[];
 }
 

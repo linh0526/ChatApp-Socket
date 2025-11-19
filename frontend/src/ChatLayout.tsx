@@ -42,6 +42,7 @@ export interface ChatLayoutProps {
   onSend: () => void;
   sending: boolean;
   currentUserName?: string | null;
+  currentUserId?: string | null;
   friends: FriendSummary[];
   incomingRequests: FriendRequestPreview[];
   outgoingRequests: FriendRequestPreview[];
@@ -81,6 +82,7 @@ export function ChatLayout({
   onSend,
   sending,
   currentUserName,
+  currentUserId,
   friends,
   incomingRequests,
   outgoingRequests,
@@ -174,6 +176,7 @@ export function ChatLayout({
             messages={messages}
             messagesError={messagesError}
             currentUserName={currentUserName}
+            currentUserId={currentUserId}
             inputValue={inputValue}
             onInputChange={onInputChange}
             onSend={onSend}
@@ -191,6 +194,7 @@ export function ChatLayout({
             onVideoCall={onVideoCall}
             onAudioCall={onAudioCall}
             onSendImage={onSendImage}
+            friends={friends}
           />
         </>
       ) : (
@@ -202,6 +206,7 @@ export function ChatLayout({
             messages={messages}
             messagesError={messagesError}
             currentUserName={currentUserName}
+            currentUserId={currentUserId}
             inputValue={inputValue}
             onInputChange={onInputChange}
             onSend={onSend}
@@ -217,6 +222,7 @@ export function ChatLayout({
             onVideoCall={onVideoCall}
             onAudioCall={onAudioCall}
             onSendImage={onSendImage}
+            friends={friends}
           />
         </>
       )}

@@ -37,12 +37,14 @@ type Image = {
 type Message = {
   _id: string;
   sender: string;
+  senderId?: string | null;
   content: string;
   createdAt: string;
   conversation?: string | null;
   messageType?: 'text' | 'voice' | 'image';
   voiceRecording?: VoiceRecording | null;
   image?: Image | null;
+  seenBy?: string[];
 };
 
 type ConversationParticipantResponse = {
@@ -151,6 +153,7 @@ const mapConversationResponse = (
 function Chat() {
   const { token, logout, user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesConversationId, setMessagesConversationId] = useState<string | null>(null);
   const [pendingMessages, setPendingMessages] = useState<Map<string, { content: string; error?: string }>>(new Map());
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
@@ -817,6 +820,7 @@ function Chat() {
 
       if (!targetConversationId) {
         setMessages([]);
+        setMessagesConversationId(null);
         if (!silent) {
           setLoading(false);
         }
@@ -862,6 +866,7 @@ function Chat() {
             const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
             const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
+            setMessagesConversationId(targetConversationId);
             updateConversationFromMessages(targetConversationId, sorted);
             if (targetConversationId === selectedConversationId) {
               setMessagesError(null);
@@ -880,6 +885,7 @@ function Chat() {
             const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
             const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
+            setMessagesConversationId(targetConversationId);
             updateConversationFromMessages(targetConversationId, sorted);
             if (targetConversationId === selectedConversationId) {
               setMessagesError(null);
@@ -897,6 +903,7 @@ function Chat() {
           const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
           const sorted = sortMessagesAsc(normalized);
           setMessages(sorted);
+          setMessagesConversationId(targetConversationId);
           updateConversationFromMessages(targetConversationId, sorted);
           if (targetConversationId === selectedConversationId) {
             setMessagesError(null);
@@ -917,9 +924,47 @@ function Chat() {
     [selectedConversationId, token, updateConversationFromMessages, withVoiceUrl, withImageUrl],
   );
 
+  const markConversationAsSeen = useCallback(
+    async (conversationId: string, messageIds: string[]) => {
+      if (!token || !user?.id) {
+        return;
+      }
+      if (!conversationId || messageIds.length === 0) {
+        return;
+      }
+
+      const viewerId = user.id;
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (!messageIds.includes(message._id)) {
+            return message;
+          }
+          const seenSet = new Set((message.seenBy ?? []).map(String));
+          if (seenSet.has(viewerId)) {
+            return message;
+          }
+          seenSet.add(viewerId);
+          return { ...message, seenBy: Array.from(seenSet) };
+        }),
+      );
+
+      try {
+        await fetch(`${API_BASE_URL}/api/messages/seen`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ conversationId, messageIds }),
+        });
+      } catch (error) {
+        console.error('markConversationAsSeen error:', error);
+      }
+    },
+    [token, user?.id],
+  );
+
   const handleIncomingMessage = useCallback(
     (message: Message) => {
       const normalizedMessage = withImageUrl(withVoiceUrl(message));
+      normalizedMessage.seenBy = normalizedMessage.seenBy ?? [];
       const rawConversationId =
         typeof normalizedMessage.conversation === 'string'
           ? normalizedMessage.conversation.trim()
@@ -936,6 +981,7 @@ function Chat() {
       const isCurrent = conversationId === selectedConversationId;
 
       if (isCurrent) {
+        setMessagesConversationId(conversationId);
         setMessages((prev) => {
           const exists = prev.some((item) => item._id === normalizedMessage._id);
           if (exists) return prev;
@@ -950,6 +996,31 @@ function Chat() {
       }
     },
     [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage, withVoiceUrl, withImageUrl],
+  );
+
+  const handleMessageSeen = useCallback(
+    (payload: { conversationId?: string; viewerId?: string; messageIds?: string[] }) => {
+      if (!payload || !payload.viewerId || !Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
+        return;
+      }
+      if (payload.conversationId && selectedConversationId && payload.conversationId !== selectedConversationId) {
+        return;
+      }
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (!payload.messageIds?.includes(message._id)) {
+            return message;
+          }
+          const seenSet = new Set((message.seenBy ?? []).map(String));
+          if (seenSet.has(payload.viewerId)) {
+            return message;
+          }
+          seenSet.add(payload.viewerId);
+          return { ...message, seenBy: Array.from(seenSet) };
+        }),
+      );
+    },
+    [selectedConversationId],
   );
 
   const sendImageMessage = useCallback(async (file: File) => {
@@ -1149,10 +1220,12 @@ function Chat() {
       id: message._id,
       content: message.content,
       sender: message.sender,
+      senderId: message.senderId ?? undefined,
       createdAt: message.createdAt,
       messageType: message.messageType ?? 'text',
       voiceRecording: message.voiceRecording ?? undefined,
       image: message.image ?? undefined,
+      seenBy: message.seenBy ?? [],
     }));
 
     // Add pending messages with errors
@@ -1162,16 +1235,18 @@ function Chat() {
           id: tempId,
           content: pending.content,
           sender: user?.username ?? 'Bạn',
+          senderId: user?.id,
           createdAt: new Date().toISOString(),
           error: pending.error,
           isPending: false,
           messageType: 'text',
+          seenBy: [],
         });
       }
     });
 
     return result.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [messages, pendingMessages, user?.username]);
+  }, [messages, pendingMessages, user?.username, user?.id]);
 
   const handleSelectConversation = useCallback((id: string) => {
     if (id === selectedConversationId) return; // Avoid unnecessary re-renders
@@ -1227,6 +1302,9 @@ function Chat() {
 
   useEffect(() => {
     if (!token) {
+      setMessages([]);
+      setMessagesConversationId(null);
+      setSelectedConversationId(null);
       setFriends([]);
       setIncomingRequests([]);
       setOutgoingRequests([]);
@@ -1252,9 +1330,38 @@ function Chat() {
   }, [friends, incomingRequests, outgoingRequests, userSearchResults.length]);
 
   useEffect(() => {
+    if (!selectedConversationId || !user?.id) {
+      return;
+    }
+    if (messagesConversationId && messagesConversationId !== selectedConversationId) {
+      return;
+    }
+    const viewerId = user.id;
+    const normalizedUsername = (user.username ?? '').toLowerCase();
+    const unseenMessageIds = messages
+      .filter((message) => {
+        const senderId = message.senderId;
+        const senderName = (message.sender ?? '').toLowerCase();
+        const isOwnMessage =
+          (senderId && senderId === viewerId) ||
+          (!senderId && normalizedUsername && senderName === normalizedUsername);
+        if (isOwnMessage) {
+          return false;
+        }
+        const seenBy = (message.seenBy ?? []).map(String);
+        return !seenBy.includes(viewerId);
+      })
+      .map((message) => message._id);
+    if (unseenMessageIds.length > 0) {
+      markConversationAsSeen(selectedConversationId, unseenMessageIds);
+    }
+  }, [messages, selectedConversationId, markConversationAsSeen, user?.id, user?.username, messagesConversationId]);
+
+  useEffect(() => {
     if (!token) return;
     if (!selectedConversationId) {
       setMessages([]);
+      setMessagesConversationId(null);
       setLoading(false);
       setMessagesError(null);
       return;
@@ -1262,6 +1369,7 @@ function Chat() {
     // Only fetch messages if initialized to avoid race conditions
     if (isInitialized) {
       setMessages([]);
+      setMessagesConversationId(selectedConversationId);
       setMessagesError(null);
       fetchMessages({ conversationId: selectedConversationId });
     }
@@ -1348,6 +1456,7 @@ function Chat() {
     socket.on('video-call:offer', handleIncomingVideoCallOffer);
     socket.on('user:online', handleUserOnline);
     socket.on('user:offline', handleUserOffline);
+    socket.on('message:seen', handleMessageSeen);
 
     if (socket.connected) {
       handleConnect();
@@ -1376,12 +1485,14 @@ function Chat() {
     socket.off('video-call:offer');
     socket.off('user:online');
     socket.off('user:offline');
+    socket.off('message:seen');
 
     socket.on('message:new', handleIncomingMessage);
     socket.on('video-call:offer', handleIncomingVideoCallOffer);
     socket.on('user:online', handleUserOnline);
     socket.on('user:offline', handleUserOffline);
-  }, [token, handleIncomingMessage, handleIncomingVideoCallOffer, handleUserOnline, handleUserOffline]);
+    socket.on('message:seen', handleMessageSeen);
+  }, [token, handleIncomingMessage, handleIncomingVideoCallOffer, handleUserOnline, handleUserOffline, handleMessageSeen]);
 
 
   const sendMessage = async () => {
@@ -1525,6 +1636,7 @@ function Chat() {
           onSend={sendMessage}
           sending={submitting}
           currentUserName={user?.username}
+          currentUserId={user?.id}
           friends={friends}
           incomingRequests={incomingRequests}
           outgoingRequests={outgoingRequests}
