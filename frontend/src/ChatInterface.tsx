@@ -378,6 +378,25 @@ export function ChatInterface({
                         <p className="text-xs text-slate-500">{message.content}</p>
                       )}
                     </div>
+                  ) : message.image ? (
+                    <div className="flex flex-col gap-2">
+                      {message.image.dataUrl || message.image.url ? (
+                        <img
+                          src={message.image.dataUrl || message.image.url}
+                          alt={message.image.originalName || message.image.fileName || 'Hình ảnh'}
+                          loading="lazy"
+                          className="max-h-80 w-full max-w-xs rounded-xl object-cover"
+                        />
+                      ) : (
+                        <p className="text-sm text-slate-500">Không thể hiển thị hình ảnh.</p>
+                      )}
+                      {message.image.originalName && (
+                        <p className="text-xs text-slate-500">{message.image.originalName}</p>
+                      )}
+                      {message.content && (
+                        <p className="text-sm text-slate-600">{message.content}</p>
+                      )}
+                    </div>
                   ) : (
                     <p className="whitespace-pre-line break-words">{message.content}</p>
                   )}
