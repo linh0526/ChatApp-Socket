@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { Image as ImageIcon, Info, Menu, Mic, Phone, Send, Smile, Square, Video } from 'lucide-react';
+import { Download, FileText, Image as ImageIcon, Info, Menu, Mic, Paperclip, Send, Smile, Square } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
@@ -31,9 +31,8 @@ interface ChatInterfaceProps {
   voiceRecordingReady?: boolean;
   isMobile?: boolean;
   onOpenSidebar?: () => void;
-  onVideoCall?: () => void;
-  onAudioCall?: () => void;
   onSendImage?: (file: File) => void | Promise<void>;
+  onSendFile?: (file: File) => void | Promise<void>;
   friends: FriendSummary[];
 }
 
@@ -67,9 +66,8 @@ export function ChatInterface({
   voiceRecordingReady,
   isMobile,
   onOpenSidebar,
-  onVideoCall,
-  onAudioCall,
   onSendImage,
+  onSendFile,
   friends = [],
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -77,6 +75,7 @@ export function ChatInterface({
   const [voiceComposerState, setVoiceComposerState] = useState<'idle' | 'recording' | 'review'>('idle');
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileUploadInputRef = useRef<HTMLInputElement>(null);
 
   const conversationDisplay = useMemo<ConversationPreview | null>(() => {
     if (conversation) return conversation;
@@ -219,6 +218,22 @@ export function ChatInterface({
     setEmojiPickerOpen(false);
   };
 
+  const formatFileSize = (inputSize?: number) => {
+    if (typeof inputSize !== 'number' || Number.isNaN(inputSize) || inputSize <= 0) {
+      return '';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = inputSize;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    const rounded =
+      size >= 10 || Number.isInteger(size) ? Math.round(size) : Number(size.toFixed(1));
+    return `${rounded} ${units[unitIndex]}`;
+  };
+
   const handleImageButtonClick = () => {
     if (!isConversationSelected) {
       window.alert('Vui lòng chọn một cuộc trò chuyện trước khi gửi ảnh.');
@@ -242,6 +257,32 @@ export function ChatInterface({
     } catch (error) {
       console.error('Failed to send image message:', error);
       window.alert('Không thể gửi ảnh. Vui lòng thử lại.');
+    }
+  };
+
+  const handleFileButtonClick = () => {
+    if (!isConversationSelected) {
+      window.alert('Vui lòng chọn một cuộc trò chuyện trước khi gửi tệp.');
+      return;
+    }
+    fileUploadInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+    if (!onSendFile) {
+      window.alert('Tính năng gửi tệp hiện chưa khả dụng.');
+      return;
+    }
+    try {
+      await onSendFile(file);
+    } catch (error) {
+      console.error('Failed to send file attachment:', error);
+      window.alert('Không thể gửi tệp. Vui lòng thử lại.');
     }
   };
 
@@ -472,6 +513,37 @@ export function ChatInterface({
                         <p className="text-sm text-slate-600">{message.content}</p>
                       )}
                     </div>
+                  ) : message.file ? (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                        <FileText className="size-5 text-blue-500" />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-900">
+                            {message.file.originalName || message.file.fileName || 'Tệp đính kèm'}
+                          </span>
+                          {formatFileSize(message.file.size) && (
+                            <span className="text-xs text-slate-500">
+                              {formatFileSize(message.file.size)}
+                            </span>
+                          )}
+                        </div>
+                        {(message.file.url || message.file.dataUrl) && (
+                          <a
+                            className="ml-auto flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-600 transition hover:bg-blue-100"
+                            href={message.file.url ?? message.file.dataUrl ?? '#'}
+                            download={message.file.originalName || message.file.fileName || 'file'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Download className="size-4" />
+                            Tải xuống
+                          </a>
+                        )}
+                      </div>
+                      {message.content && (
+                        <p className="text-sm text-slate-700">{message.content}</p>
+                      )}
+                    </div>
                   ) : (
                     <p className="whitespace-pre-line break-words">{message.content}</p>
                   )}
@@ -533,26 +605,6 @@ export function ChatInterface({
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="rounded-full"
-                  onClick={onAudioCall}
-                  title="Gọi thoại"
-                  aria-label="Gọi thoại"
-                >
-                  <Phone className="size-5 text-blue-500" />
-                </Button>
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="rounded-full"
-                onClick={onVideoCall}
-                title="Gọi video"
-                aria-label="Gọi video"
-              >
-                <Video className="size-5 text-blue-500" />
-              </Button>
                 <Button variant="ghost" size="icon" className="rounded-full">
                   <Info className="size-5 text-blue-500" />
                 </Button>
@@ -588,6 +640,12 @@ export function ChatInterface({
                 onChange={handleImageChange}
                 className="hidden"
               />
+            <input
+              type="file"
+              ref={fileUploadInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+            />
               <div className="flex flex-1 items-center gap-2">
                 <div className="flex items-center gap-2">
                   <Button
@@ -601,6 +659,17 @@ export function ChatInterface({
                   >
                     <ImageIcon className="size-4" />
                   </Button>
+                <Button
+                  onClick={handleFileButtonClick}
+                  size="icon"
+                  className="rounded-full"
+                  variant="outline"
+                  disabled={!isConversationSelected}
+                  title="Gửi tệp"
+                  aria-label="Gửi tệp"
+                >
+                  <Paperclip className="size-4" />
+                </Button>
                   <Button
                     onClick={handleVoiceMessageStart}
                     size="icon"

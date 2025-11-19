@@ -16,6 +16,15 @@ export interface ImagePayload {
   size?: number;
 }
 
+export interface FilePayload {
+  dataUrl?: string;
+  url?: string;
+  fileName?: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+}
+
 export interface ChatMessage {
   id: string;
   sender: string;
@@ -24,9 +33,10 @@ export interface ChatMessage {
   createdAt: string;
   error?: string;
   isPending?: boolean;
-  messageType?: 'text' | 'voice' | 'image';
+  messageType?: 'text' | 'voice' | 'image' | 'file';
   voiceRecording?: VoiceRecordingPayload | null;
   image?: ImagePayload | null;
+  file?: FilePayload | null;
   seenBy?: string[];
 }
 

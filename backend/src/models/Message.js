@@ -14,7 +14,7 @@ const messageSchema = new mongoose.Schema(
     content: {
       type: String,
       required: function requiredContent() {
-        return this.messageType !== 'voice' && this.messageType !== 'image';
+        return !['voice', 'image', 'file'].includes(this.messageType);
       },
       trim: true,
     },
@@ -24,7 +24,7 @@ const messageSchema = new mongoose.Schema(
     },
     messageType: {
       type: String,
-      enum: ['text', 'voice', 'image'],
+      enum: ['text', 'voice', 'image', 'file'],
       default: 'text',
     },
     voiceRecording: {
@@ -37,6 +37,14 @@ const messageSchema = new mongoose.Schema(
       url: { type: String },
     },
     image: {
+      data: { type: Buffer },
+      mimeType: { type: String },
+      size: { type: Number },
+      originalName: { type: String },
+      relativePath: { type: String },
+      url: { type: String },
+    },
+    file: {
       data: { type: Buffer },
       mimeType: { type: String },
       size: { type: Number },

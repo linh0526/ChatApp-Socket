@@ -4,6 +4,7 @@ const {
   createMessage,
   createVoiceMessage,
   createImageMessage,
+  createFileMessage,
   markMessagesSeen,
 } = require('../controllers/messageController');
 const auth = require('../middleware/auth');
@@ -22,10 +23,17 @@ const imageBodyParser = express.raw({
   limit: Number.isNaN(imageUploadLimit) ? 10 * 1024 * 1024 : imageUploadLimit,
 });
 
+const fileUploadLimit = parseInt(process.env.FILE_UPLOAD_MAX_SIZE || '', 10);
+const fileBodyParser = express.raw({
+  type: () => true,
+  limit: Number.isNaN(fileUploadLimit) ? 20 * 1024 * 1024 : fileUploadLimit,
+});
+
 router.get('/', auth, getMessages);
 router.post('/', auth, createMessage);
 router.post('/voice', auth, voiceBodyParser, createVoiceMessage);
 router.post('/image', auth, imageBodyParser, createImageMessage);
+router.post('/file', auth, fileBodyParser, createFileMessage);
 router.post('/seen', auth, markMessagesSeen);
 
 // Debug route to verify registration
@@ -34,6 +42,7 @@ console.log('  GET  /api/messages');
 console.log('  POST /api/messages');
 console.log('  POST /api/messages/voice');
 console.log('  POST /api/messages/image');
+console.log('  POST /api/messages/file');
 console.log('  POST /api/messages/seen');
 
 module.exports = router;

@@ -6,7 +6,6 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import { ChatLayout, type ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
-import { VideoCall } from './VideoCall';
 import type {
   FriendActionFeedback,
   FriendRequestPreview,
@@ -34,6 +33,16 @@ type Image = {
   relativePath?: string;
 };
 
+type FileAttachment = {
+  dataUrl?: string;
+  url?: string;
+  fileName?: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+  relativePath?: string;
+};
+
 type Message = {
   _id: string;
   sender: string;
@@ -41,9 +50,10 @@ type Message = {
   content: string;
   createdAt: string;
   conversation?: string | null;
-  messageType?: 'text' | 'voice' | 'image';
+  messageType?: 'text' | 'voice' | 'image' | 'file';
   voiceRecording?: VoiceRecording | null;
   image?: Image | null;
+  file?: FileAttachment | null;
   seenBy?: string[];
 };
 
@@ -178,8 +188,6 @@ function Chat() {
   const voiceMessageBlobRef = useRef<Blob | null>(null);
   const [voiceMessagePending, setVoiceMessagePending] = useState(false);
   const [voiceRecordingReady, setVoiceRecordingReady] = useState(false);
-  const [isVideoCallOpen, setIsVideoCallOpen] = useState(false);
-  const [callType, setCallType] = useState<'video' | 'audio'>('video');
 
   const assetBaseUrl = useMemo(() => {
     if (API_BASE_URL) {
@@ -251,6 +259,42 @@ function Chat() {
       };
     },
     [assetBaseUrl],
+  );
+
+  const withFileUrl = useCallback(
+    (message: Message): Message => {
+      const file = message.file;
+      if (!file) {
+        return { ...message, file: file ?? undefined };
+      }
+
+      if (file.dataUrl) {
+        return { ...message, file: { ...file } };
+      }
+
+      if (!file.url) {
+        return { ...message, file: { ...file } };
+      }
+
+      const isAbsolute = /^https?:\/\//i.test(file.url);
+      const resolvedUrl = isAbsolute
+        ? file.url
+        : `${assetBaseUrl}${file.url.startsWith('/') ? '' : '/'}${file.url}`;
+
+      return {
+        ...message,
+        file: {
+          ...file,
+          url: resolvedUrl,
+        },
+      };
+    },
+    [assetBaseUrl],
+  );
+
+  const normalizeMessagePayload = useCallback(
+    (message: Message) => withFileUrl(withImageUrl(withVoiceUrl(message))),
+    [withFileUrl, withImageUrl, withVoiceUrl],
   );
 
   type RecorderStopDeferred = {
@@ -863,7 +907,7 @@ function Chat() {
                   },
                 );
             });
-            const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
+            const normalized = data.map((msg) => normalizeMessagePayload(msg));
             const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
             setMessagesConversationId(targetConversationId);
@@ -882,7 +926,7 @@ function Chat() {
             });
             if (!response.ok) throw new Error('Không thể tải danh sách tin nhắn');
             const data: Message[] = await response.json();
-            const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
+            const normalized = data.map((msg) => normalizeMessagePayload(msg));
             const sorted = sortMessagesAsc(normalized);
             setMessages(sorted);
             setMessagesConversationId(targetConversationId);
@@ -900,7 +944,7 @@ function Chat() {
           });
           if (!response.ok) throw new Error('Không thể tải danh sách tin nhắn');
           const data: Message[] = await response.json();
-          const normalized = data.map((msg) => withImageUrl(withVoiceUrl(msg)));
+          const normalized = data.map((msg) => normalizeMessagePayload(msg));
           const sorted = sortMessagesAsc(normalized);
           setMessages(sorted);
           setMessagesConversationId(targetConversationId);
@@ -921,7 +965,7 @@ function Chat() {
         }
       }
     },
-    [selectedConversationId, token, updateConversationFromMessages, withVoiceUrl, withImageUrl],
+    [selectedConversationId, token, updateConversationFromMessages, normalizeMessagePayload],
   );
 
   const markConversationAsSeen = useCallback(
@@ -963,7 +1007,7 @@ function Chat() {
 
   const handleIncomingMessage = useCallback(
     (message: Message) => {
-      const normalizedMessage = withImageUrl(withVoiceUrl(message));
+      const normalizedMessage = normalizeMessagePayload(message);
       normalizedMessage.seenBy = normalizedMessage.seenBy ?? [];
       const rawConversationId =
         typeof normalizedMessage.conversation === 'string'
@@ -995,7 +1039,7 @@ function Chat() {
         void fetchConversations();
       }
     },
-    [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage, withVoiceUrl, withImageUrl],
+    [fetchConversations, selectedConversationId, updateConversationPreviewFromMessage, normalizeMessagePayload],
   );
 
   const handleMessageSeen = useCallback(
@@ -1006,16 +1050,17 @@ function Chat() {
       if (payload.conversationId && selectedConversationId && payload.conversationId !== selectedConversationId) {
         return;
       }
+      const viewerId = payload.viewerId as string;
       setMessages((prev) =>
         prev.map((message) => {
           if (!payload.messageIds?.includes(message._id)) {
             return message;
           }
           const seenSet = new Set((message.seenBy ?? []).map(String));
-          if (seenSet.has(payload.viewerId)) {
+          if (seenSet.has(viewerId)) {
             return message;
           }
-          seenSet.add(payload.viewerId);
+          seenSet.add(viewerId);
           return { ...message, seenBy: Array.from(seenSet) };
         }),
       );
@@ -1032,11 +1077,12 @@ function Chat() {
       window.alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
       return;
     }
+    const conversationId = selectedConversationId as string;
 
     try {
       const fileName = file.name || `image-${Date.now()}.jpg`;
       const endpoint = `${API_BASE_URL}/api/messages/image?conversationId=${encodeURIComponent(
-        selectedConversationId,
+        conversationId,
       )}`;
 
       const response = await fetch(endpoint, {
@@ -1075,14 +1121,75 @@ function Chat() {
         throw new Error(errorMessage);
       }
 
-      const normalized = withImageUrl(withVoiceUrl(payload));
+      const normalized = normalizeMessagePayload(payload);
       handleIncomingMessage(normalized);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Gửi hình ảnh thất bại';
       console.error('sendImageMessage error:', error);
       window.alert(message);
     }
-  }, [handleIncomingMessage, selectedConversationId, token, withImageUrl, withVoiceUrl]);
+  }, [handleIncomingMessage, normalizeMessagePayload, selectedConversationId, token]);
+
+  const sendFileMessage = useCallback(async (file: File) => {
+    if (!selectedConversationId) {
+      window.alert('Vui lòng chọn một cuộc trò chuyện để gửi tệp.');
+      return;
+    }
+    if (!token) {
+      window.alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      return;
+    }
+    const conversationId = selectedConversationId as string;
+
+    try {
+      const fileName = file.name || `file-${Date.now()}`;
+      const endpoint = `${API_BASE_URL}/api/messages/file?conversationId=${encodeURIComponent(
+        conversationId,
+      )}`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'X-File-Filename': fileName,
+        },
+        body: file,
+      });
+
+      const contentType = response.headers.get('content-type');
+      let payload: Message & { error?: string };
+
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        }
+        throw new Error('Server trả về lỗi không hợp lệ. Vui lòng thử lại.');
+      }
+
+      try {
+        payload = (await response.json()) as Message & { error?: string };
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        const text = await response.text();
+        console.error('Response text:', text.substring(0, 200));
+        throw new Error('Không thể đọc phản hồi từ server.');
+      }
+
+      if (!response.ok) {
+        const errorMessage = payload?.error ?? `Gửi tệp thất bại (${response.status})`;
+        throw new Error(errorMessage);
+      }
+
+      const normalized = normalizeMessagePayload(payload);
+      handleIncomingMessage(normalized);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gửi tệp thất bại';
+      console.error('sendFileMessage error:', error);
+      window.alert(message);
+    }
+  }, [handleIncomingMessage, normalizeMessagePayload, selectedConversationId, token]);
 
   const sendVoiceMessage = useCallback(async () => {
     const blob = voiceMessageBlobRef.current;
@@ -1122,7 +1229,7 @@ function Chat() {
         throw new Error(errorMessage);
       }
 
-      const normalized = withImageUrl(withVoiceUrl(payload));
+      const normalized = normalizeMessagePayload(payload);
       handleIncomingMessage(normalized);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Gửi tin nhắn thoại thất bại';
@@ -1134,7 +1241,7 @@ function Chat() {
       voiceMessageBlobRef.current = null;
       setVoiceRecordingReady(false);
     }
-  }, [handleIncomingMessage, selectedConversationId, token, withVoiceUrl]);
+  }, [handleIncomingMessage, normalizeMessagePayload, selectedConversationId, token]);
 
   const startConversationWithFriend = useCallback(
     async (friendId: string) => {
@@ -1225,6 +1332,7 @@ function Chat() {
       messageType: message.messageType ?? 'text',
       voiceRecording: message.voiceRecording ?? undefined,
       image: message.image ?? undefined,
+      file: message.file ?? undefined,
       seenBy: message.seenBy ?? [],
     }));
 
@@ -1256,33 +1364,6 @@ function Chat() {
     // Clear pending messages when switching conversations
     setPendingMessages(new Map());
   }, [selectedConversationId]);
-
-  const handleStartVideoCall = useCallback(() => {
-    if (!selectedConversationId) return;
-    const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) return;
-    setCallType('video');
-    setIsVideoCallOpen(true);
-  }, [selectedConversationId, conversations]);
-
-  const handleStartAudioCall = useCallback(() => {
-    if (!selectedConversationId) return;
-    const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) return;
-    setCallType('audio');
-    setIsVideoCallOpen(true);
-  }, [selectedConversationId, conversations]);
-
-  const handleCloseVideoCall = useCallback(() => {
-    setIsVideoCallOpen(false);
-  }, []);
-
-  const getOtherUserName = useCallback(() => {
-    if (!selectedConversationId) return '';
-    const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) return '';
-    return conversation.title || 'Người dùng';
-  }, [selectedConversationId, conversations]);
 
   useEffect(() => {
     if (!selectedConversationId) return;
@@ -1375,18 +1456,6 @@ function Chat() {
     }
   }, [token, selectedConversationId, fetchMessages, isInitialized]);
 
-  const handleIncomingVideoCallOffer = useCallback((data: { conversationId: string; offer: RTCSessionDescriptionInit; from?: string }) => {
-    if (data.conversationId) {
-      setSelectedConversationId(prev => {
-        if (prev !== data.conversationId) {
-          return data.conversationId;
-        }
-        return prev;
-      });
-    }
-    setIsVideoCallOpen(true);
-  }, []);
-
   const handleUserOnline = useCallback((data: { userId: string; username?: string }) => {
     setFriends(prev => prev.map(friend => 
       friend.id === data.userId ? { ...friend, isOnline: true } : friend
@@ -1453,7 +1522,6 @@ function Chat() {
 
     socket.on('connect', handleConnect);
     socket.on('message:new', handleIncomingMessage);
-    socket.on('video-call:offer', handleIncomingVideoCallOffer);
     socket.on('user:online', handleUserOnline);
     socket.on('user:offline', handleUserOffline);
     socket.on('message:seen', handleMessageSeen);
@@ -1482,17 +1550,15 @@ function Chat() {
 
     // Update handlers by removing and re-adding
     socket.off('message:new');
-    socket.off('video-call:offer');
     socket.off('user:online');
     socket.off('user:offline');
     socket.off('message:seen');
 
     socket.on('message:new', handleIncomingMessage);
-    socket.on('video-call:offer', handleIncomingVideoCallOffer);
     socket.on('user:online', handleUserOnline);
     socket.on('user:offline', handleUserOffline);
     socket.on('message:seen', handleMessageSeen);
-  }, [token, handleIncomingMessage, handleIncomingVideoCallOffer, handleUserOnline, handleUserOffline, handleMessageSeen]);
+  }, [token, handleIncomingMessage, handleUserOnline, handleUserOffline, handleMessageSeen]);
 
 
   const sendMessage = async () => {
@@ -1659,21 +1725,10 @@ function Chat() {
         onVoiceMessageSend={sendVoiceMessage}
           onVoiceMessageCancel={cancelVoiceMessage}
           voiceRecordingReady={voiceRecordingReady}
-          onVideoCall={handleStartVideoCall}
-          onAudioCall={handleStartAudioCall}
           onSendImage={sendImageMessage}
+          onSendFile={sendFileMessage}
         />
       </div>
-      {isVideoCallOpen && selectedConversationId && (
-        <VideoCall
-          isOpen={isVideoCallOpen}
-          onClose={handleCloseVideoCall}
-          conversationId={selectedConversationId}
-          otherUserName={getOtherUserName()}
-          socket={socketRef.current}
-          callType={callType}
-        />
-      )}
     </div>
   );
 }

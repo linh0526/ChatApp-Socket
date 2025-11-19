@@ -1,7 +1,7 @@
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
 const { encryptText, decryptText } = require('../utils/encryption');
-const { storeVoiceRecording, storeImageFile } = require('../utils/storage');
+const { storeVoiceRecording, storeImageFile, storeFileAttachment } = require('../utils/storage');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
@@ -127,6 +127,7 @@ const markMessagesAsSeen = async ({
 
 const VOICE_PLACEHOLDER_CONTENT = 'Tin nhắn thoại';
 const IMAGE_PLACEHOLDER_CONTENT = 'Hình ảnh';
+const FILE_PLACEHOLDER_CONTENT = 'Tệp đính kèm';
 
 const buildUploadUrl = (url, relativePath) => {
   if (typeof url === 'string' && url.trim()) {
@@ -223,6 +224,47 @@ const sanitizeImage = (image) => {
   };
 };
 
+const sanitizeFileAttachment = (file) => {
+  if (!file) {
+    return undefined;
+  }
+
+  const source = typeof file.toObject === 'function' ? file.toObject() : file;
+
+  const resolvedUrl = buildUploadUrl(source.url, source.relativePath);
+  if (resolvedUrl) {
+    return {
+      url: resolvedUrl,
+      mimeType: source.mimeType || 'application/octet-stream',
+      originalName: source.originalName,
+      size: source.size,
+    };
+  }
+
+  const { data, mimeType, size, originalName } = source;
+
+  let buffer = null;
+  if (Buffer.isBuffer(data)) {
+    buffer = data;
+  } else if (data && typeof data === 'object' && Array.isArray(data.data)) {
+    buffer = Buffer.from(data.data);
+  }
+
+  if (!buffer || buffer.length === 0) {
+    return undefined;
+  }
+
+  const resolvedMime = mimeType || 'application/octet-stream';
+  const base64 = buffer.toString('base64');
+
+  return {
+    dataUrl: `data:${resolvedMime};base64,${base64}`,
+    mimeType: resolvedMime,
+    originalName: originalName || 'file.bin',
+    size: size ?? buffer.length,
+  };
+};
+
 const createMessageDocument = async ({
   senderId,
   sender,
@@ -231,6 +273,7 @@ const createMessageDocument = async ({
   messageType = 'text',
   voiceRecording,
   image,
+  fileAttachment,
 }) => {
   if (!sender) {
     const error = new Error('sender is required');
@@ -238,7 +281,7 @@ const createMessageDocument = async ({
     throw error;
   }
 
-  const normalizedType = messageType === 'voice' ? 'voice' : messageType === 'image' ? 'image' : 'text';
+  const normalizedType = ['voice', 'image', 'file'].includes(messageType) ? messageType : 'text';
   const trimmedSender = sender.trim();
   let trimmedContent = typeof content === 'string' ? content.trim() : '';
 
@@ -265,6 +308,15 @@ const createMessageDocument = async ({
     }
     if (!trimmedContent) {
       trimmedContent = IMAGE_PLACEHOLDER_CONTENT;
+    }
+  } else if (normalizedType === 'file') {
+    if (!fileAttachment) {
+      const error = new Error('file metadata is required');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!trimmedContent) {
+      trimmedContent = FILE_PLACEHOLDER_CONTENT;
     }
   }
 
@@ -298,6 +350,7 @@ const createMessageDocument = async ({
     messageType: normalizedType,
     voiceRecording: normalizedType === 'voice' ? voiceRecording : undefined,
     image: normalizedType === 'image' ? image : undefined,
+    file: normalizedType === 'file' ? fileAttachment : undefined,
     conversation: conversation ? conversation._id : undefined,
   });
 
@@ -313,6 +366,8 @@ const createMessageDocument = async ({
     sanitizedVoiceRecording ?? sanitizeVoiceRecording(voiceRecording) ?? undefined;
   const sanitizedImage = sanitizeImage(plainMessage.image);
   plainMessage.image = sanitizedImage ?? sanitizeImage(image) ?? undefined;
+  const sanitizedFile = sanitizeFileAttachment(plainMessage.file);
+  plainMessage.file = sanitizedFile ?? sanitizeFileAttachment(fileAttachment) ?? undefined;
   const enrichedMessage = enrichMessageForClient(plainMessage);
 
   emitNewMessage(enrichedMessage);
@@ -598,172 +653,6 @@ const registerSocketHandlers = (socket) => {
     }
   });
 
-  // Video call handlers
-  socket.on('video-call:offer', async (payload) => {
-    try {
-      const { token, conversationId, offer } = payload ?? {};
-      if (!token) return;
-      
-      const decoded = jwt.verify(token, JWT_SECRET);
-      const userId = decoded.id;
-      const username = decoded.username;
-      console.log('[Backend] User:', username, 'Conversation:', conversationId);
-
-      // Verify conversation access
-      if (conversationId) {
-        const conversation = await Conversation.findById(conversationId).select('participants');
-        if (!conversation) return;
-        
-        const isParticipant = conversation.participants.some(
-          (participant) => participant?.toString?.() === userId
-        );
-        if (!isParticipant) return;
-      }
-
-      // Store socket info
-      socketUsers.set(socket.id, { userId, username, conversationId });
-      console.log('[Backend] Stored socket info for user:', username);
-
-      // Forward offer to other participants in the conversation
-      if (conversationId && ioInstance) {
-        const conversation = await Conversation.findById(conversationId).select('participants');
-        if (conversation) {
-          let forwarded = false;
-          conversation.participants.forEach((participantId) => {
-            if (participantId.toString() !== userId) {
-              // Find sockets for this participant
-              ioInstance.sockets.sockets.forEach((otherSocket) => {
-                const otherUser = socketUsers.get(otherSocket.id);
-                if (otherUser && otherUser.userId === participantId.toString()) {
-                  console.log('[Backend] 📤 Forwarding offer to user:', otherUser.username);
-                  otherSocket.emit('video-call:offer', { conversationId, offer, from: username });
-                  forwarded = true;
-                }
-              });
-            }
-          });
-          if (!forwarded) {
-            console.log('[Backend] ⚠️ No online participants found to forward offer');
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[Backend] ❌ Error handling video-call:offer:', error);
-    }
-  });
-
-  socket.on('video-call:answer', async (payload) => {
-    try {
-      console.log('[Backend] 📨 Received video-call:answer');
-      const { token, conversationId, answer } = payload ?? {};
-      if (!token) {
-        console.log('[Backend] ❌ No token provided');
-        return;
-      }
-      
-      const decoded = jwt.verify(token, JWT_SECRET);
-      const userId = decoded.id;
-      console.log('[Backend] Answer from user:', userId, 'Conversation:', conversationId);
-
-      // Forward answer to the caller
-      if (conversationId && ioInstance) {
-        const conversation = await Conversation.findById(conversationId).select('participants');
-        if (conversation) {
-          let forwarded = false;
-          conversation.participants.forEach((participantId) => {
-            if (participantId.toString() !== userId) {
-              ioInstance.sockets.sockets.forEach((otherSocket) => {
-                const otherUser = socketUsers.get(otherSocket.id);
-                if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
-                  console.log('[Backend] 📤 Forwarding answer to user:', otherUser.username);
-                  otherSocket.emit('video-call:answer', { conversationId, answer });
-                  forwarded = true;
-                }
-              });
-            }
-          });
-          if (!forwarded) {
-            console.log('[Backend] ⚠️ No caller found to forward answer');
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[Backend] ❌ Error handling video-call:answer:', error);
-    }
-  });
-
-  socket.on('video-call:ice-candidate', async (payload) => {
-    try {
-      const { token, conversationId, candidate } = payload ?? {};
-      if (!token) return;
-      
-      const decoded = jwt.verify(token, JWT_SECRET);
-      const userId = decoded.id;
-
-      // Forward ICE candidate to other participants
-      if (conversationId && ioInstance) {
-        const conversation = await Conversation.findById(conversationId).select('participants');
-        if (conversation) {
-          conversation.participants.forEach((participantId) => {
-            if (participantId.toString() !== userId) {
-              ioInstance.sockets.sockets.forEach((otherSocket) => {
-                const otherUser = socketUsers.get(otherSocket.id);
-                if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
-                  otherSocket.emit('video-call:ice-candidate', { conversationId, candidate });
-                }
-              });
-            }
-          });
-        }
-      }
-    } catch (error) {
-      console.error('[Backend] ❌ Error handling video-call:ice-candidate:', error);
-    }
-  });
-
-  socket.on('video-call:end', async (payload) => {
-    try {
-      console.log('[Backend] 📞 Received video-call:end');
-      const { token, conversationId } = payload ?? {};
-      if (!token) {
-        console.log('[Backend] ❌ No token provided');
-        return;
-      }
-      
-      const decoded = jwt.verify(token, JWT_SECRET);
-      const userId = decoded.id;
-      console.log('[Backend] Call ended by user:', userId, 'Conversation:', conversationId);
-
-      // Notify other participants
-      if (conversationId && ioInstance) {
-        const conversation = await Conversation.findById(conversationId).select('participants');
-        if (conversation) {
-          let notified = false;
-          conversation.participants.forEach((participantId) => {
-            if (participantId.toString() !== userId) {
-              ioInstance.sockets.sockets.forEach((otherSocket) => {
-                const otherUser = socketUsers.get(otherSocket.id);
-                if (otherUser && otherUser.userId === participantId.toString() && otherUser.conversationId === conversationId) {
-                  console.log('[Backend] 📤 Notifying user:', otherUser.username, 'that call ended');
-                  otherSocket.emit('video-call:ended', { conversationId });
-                  notified = true;
-                }
-              });
-            }
-          });
-          if (!notified) {
-            console.log('[Backend] ⚠️ No online participants to notify');
-          }
-        }
-      }
-
-      // Clean up
-      socketUsers.delete(socket.id);
-      console.log('[Backend] ✅ Call ended and cleaned up');
-    } catch (error) {
-      console.error('[Backend] ❌ Error handling video-call:end:', error);
-    }
-  });
 
   socket.on('disconnect', () => {
     const userInfo = socketUsers.get(socket.id);
@@ -940,6 +829,71 @@ const createImageMessage = async (req, res) => {
   }
 };
 
+const createFileMessage = async (req, res) => {
+  try {
+    const { conversationId } = req.query || {};
+    const sender = req.user?.username;
+    const senderId = req.user?.id;
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Dữ liệu tệp không hợp lệ' });
+    }
+
+    let contentType = req.headers['content-type'] || 'application/octet-stream';
+    if (contentType.includes(';')) {
+      contentType = contentType.split(';')[0].trim();
+    }
+
+    const originalNameHeader = req.headers['x-file-filename'] || req.headers['x-attachment-filename'];
+    const originalName = Array.isArray(originalNameHeader)
+      ? originalNameHeader[0]
+      : originalNameHeader;
+
+    const fileBuffer = Buffer.from(req.body);
+    let storedFile = null;
+    try {
+      const stored = await storeFileAttachment({
+        buffer: fileBuffer,
+        mimeType: contentType || 'application/octet-stream',
+        originalName: originalName || `file-${Date.now()}`,
+        userId: senderId || 'anonymous',
+      });
+      storedFile = {
+        mimeType: stored.mimeType,
+        size: stored.size,
+        originalName: stored.originalName,
+        relativePath: stored.relativePath,
+        url: stored.url,
+      };
+    } catch (storageError) {
+      console.error('Failed to store file on disk, falling back to inline buffer:', storageError);
+      storedFile = {
+        data: fileBuffer,
+        mimeType: contentType || 'application/octet-stream',
+        size: fileBuffer.length,
+        originalName: originalName || `file-${Date.now()}`,
+      };
+    }
+
+    const message = await createMessageDocument({
+      senderId,
+      sender,
+      content: FILE_PLACEHOLDER_CONTENT,
+      conversationId,
+      messageType: 'file',
+      fileAttachment: storedFile,
+    });
+
+    res.status(201).json(message);
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    if (statusCode >= 500) {
+      console.error('Error creating file message:', error);
+    }
+    res.status(statusCode).json({ error: error.message || 'Failed to create file message' });
+  }
+};
+
 const markMessagesSeenController = async (req, res) => {
   try {
     const { conversationId, messageIds } = req.body || {};
@@ -979,6 +933,7 @@ module.exports = {
   createMessage,
   createVoiceMessage,
   createImageMessage,
+  createFileMessage,
   registerSocketHandlers,
   setSocketIO,
   getOnlineUserIds,

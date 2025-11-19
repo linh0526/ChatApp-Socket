@@ -7,6 +7,7 @@ const mime = require('mime-types');
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
 const voiceRoot = path.join(uploadsRoot, 'voice');
 const imageRoot = path.join(uploadsRoot, 'images');
+const fileRoot = path.join(uploadsRoot, 'files');
 
 const ensureDirSync = (dirPath) => {
   if (!fs.existsSync(dirPath)) {
@@ -17,6 +18,7 @@ const ensureDirSync = (dirPath) => {
 ensureDirSync(uploadsRoot);
 ensureDirSync(voiceRoot);
 ensureDirSync(imageRoot);
+ensureDirSync(fileRoot);
 
 const normalizeSegment = (segment) =>
   String(segment || '')
@@ -91,12 +93,31 @@ const storeImageFile = async ({ buffer, mimeType, originalName, userId }) => {
   return stored;
 };
 
+const storeFileAttachment = async ({ buffer, mimeType, originalName, userId }) => {
+  const stored = await storeBinaryAsset({
+    rootDir: fileRoot,
+    userId,
+    buffer,
+    mimeType: mimeType || 'application/octet-stream',
+    originalName,
+    fallbackExt: 'bin',
+  });
+
+  if (!stored.mimeType) {
+    stored.mimeType = 'application/octet-stream';
+  }
+
+  return stored;
+};
+
 module.exports = {
   uploadsRoot,
   voiceRoot,
   imageRoot,
+  fileRoot,
   ensureDirSync,
   storeVoiceRecording,
   storeImageFile,
+  storeFileAttachment,
 };
 
