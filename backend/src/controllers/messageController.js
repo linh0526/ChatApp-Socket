@@ -8,9 +8,106 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 let ioInstance = null;
 const socketUsers = new Map(); // Map socket.id -> { userId, username, conversationId }
 const onlineUsers = new Set(); // Set of userId strings for quick lookup
+const userSocketMap = new Map(); // Map userId -> Set<socketId>
+const activeCalls = new Map(); // Map callId -> call metadata
+const userActiveCallMap = new Map(); // Map userId -> callId
+const CALL_TYPES = new Set(['audio', 'video']);
 
 const setSocketIO = (io) => {
   ioInstance = io;
+};
+
+const attachSocketToUser = ({ socket, userId, username }) => {
+  if (!socket || !userId) {
+    return;
+  }
+  socketUsers.set(socket.id, { userId, username, conversationId: null });
+  let sockets = userSocketMap.get(userId);
+  const wasOffline = !sockets || sockets.size === 0;
+  if (!sockets) {
+    sockets = new Set();
+    userSocketMap.set(userId, sockets);
+  }
+  sockets.add(socket.id);
+  if (wasOffline) {
+    onlineUsers.add(userId);
+    if (ioInstance) {
+      ioInstance.emit('user:online', { userId, username });
+    }
+  }
+};
+
+const detachSocketFromUser = (socketId) => {
+  if (!socketId) return null;
+  const userInfo = socketUsers.get(socketId);
+  if (!userInfo) {
+    return null;
+  }
+  socketUsers.delete(socketId);
+  const sockets = userSocketMap.get(userInfo.userId);
+  if (sockets) {
+    sockets.delete(socketId);
+    if (sockets.size === 0) {
+      userSocketMap.delete(userInfo.userId);
+      onlineUsers.delete(userInfo.userId);
+      if (ioInstance) {
+        ioInstance.emit('user:offline', { userId: userInfo.userId });
+      }
+    }
+  }
+  return userInfo;
+};
+
+const emitToUser = (userId, eventName, payload) => {
+  if (!ioInstance || !userId || !eventName) {
+    return false;
+  }
+  const sockets = userSocketMap.get(userId);
+  if (!sockets || sockets.size === 0) {
+    return false;
+  }
+  sockets.forEach((socketId) => {
+    ioInstance.to(socketId).emit(eventName, payload);
+  });
+  return true;
+};
+
+const releaseCall = (callId) => {
+  if (!callId) {
+    return null;
+  }
+  const call = activeCalls.get(callId);
+  if (!call) {
+    return null;
+  }
+  activeCalls.delete(callId);
+  userActiveCallMap.delete(call.initiatorId);
+  userActiveCallMap.delete(call.targetUserId);
+  return call;
+};
+
+const finalizeCallForUser = (userId, { reason = 'ended', endedBy } = {}) => {
+  if (!userId) return;
+  const callId = userActiveCallMap.get(userId);
+  if (!callId) {
+    return;
+  }
+  const call = releaseCall(callId);
+  if (!call) {
+    return;
+  }
+  const payload = { callId, reason, endedBy: endedBy ?? userId };
+  emitToUser(call.initiatorId, 'call:ended', payload);
+  emitToUser(call.targetUserId, 'call:ended', payload);
+};
+
+const decodeSocketToken = (token) => {
+  if (!token) {
+    const error = new Error('Authentication token is required');
+    error.statusCode = 401;
+    throw error;
+  }
+  return jwt.verify(token, JWT_SECRET);
 };
 
 const emitNewMessage = (message) => {
@@ -474,16 +571,7 @@ const registerSocketHandlers = (socket) => {
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.id;
       const username = decoded.username;
-      
-      // Track user as online
-      if (!onlineUsers.has(userId)) {
-        onlineUsers.add(userId);
-        socketUsers.set(socket.id, { userId, username, conversationId: null });
-        // Notify others that user came online
-        if (ioInstance) {
-          ioInstance.emit('user:online', { userId, username });
-        }
-      }
+      attachSocketToUser({ socket, userId, username });
     } catch (error) {
       // Ignore auth errors
     }
@@ -500,14 +588,7 @@ const registerSocketHandlers = (socket) => {
       const userId = decoded.id;
       const username = decoded.username;
       
-      // Track user as online when they use any authenticated event
-      if (!onlineUsers.has(userId)) {
-        onlineUsers.add(userId);
-        socketUsers.set(socket.id, { userId, username, conversationId: null });
-        if (ioInstance) {
-          ioInstance.emit('user:online', { userId, username });
-        }
-      }
+      attachSocketToUser({ socket, userId, username });
 
       if (conversationId) {
         const conversation = await Conversation.findById(conversationId).select('participants');
@@ -660,16 +741,371 @@ const registerSocketHandlers = (socket) => {
     }
   });
 
+  const buildErrorMessage = (error, fallback) => {
+    if (!error) return fallback;
+    if (error.statusCode && error.statusCode < 500) {
+      return error.message;
+    }
+    if (error.name === 'JsonWebTokenError') {
+      return 'Phiên đăng nhập đã hết hạn';
+    }
+    return fallback;
+  };
+
+  socket.on('call:initiate', async (payload, callback) => {
+    const reply = typeof callback === 'function' ? callback : () => {};
+    try {
+      const { token, callId, conversationId, callType, offer } = payload ?? {};
+      const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+      const normalizedConversationId =
+        typeof conversationId === 'string' ? conversationId.trim() : '';
+      const normalizedCallType =
+        typeof callType === 'string' ? callType.trim().toLowerCase() : '';
+
+      if (!normalizedCallId) {
+        const error = new Error('callId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!normalizedConversationId) {
+        const error = new Error('conversationId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!CALL_TYPES.has(normalizedCallType)) {
+        const error = new Error('Loại cuộc gọi không hợp lệ');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!offer || typeof offer !== 'object') {
+        const error = new Error('Thiếu dữ liệu offer');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (activeCalls.has(normalizedCallId)) {
+        const error = new Error('callId đã tồn tại');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const decoded = decodeSocketToken(token);
+      const callerId = decoded.id;
+      const callerUsername = decoded.username;
+      attachSocketToUser({ socket, userId: callerId, username: callerUsername });
+
+      if (userActiveCallMap.has(callerId)) {
+        const error = new Error('Bạn đang trong một cuộc gọi khác');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const conversation = await Conversation.findById(normalizedConversationId).select(
+        'participants name isGroup',
+      );
+      if (!conversation) {
+        const error = new Error('Conversation not found');
+        error.statusCode = 404;
+        throw error;
+      }
+      const participants = (conversation.participants ?? [])
+        .map((participant) =>
+          participant && typeof participant.toString === 'function'
+            ? participant.toString()
+            : typeof participant === 'string'
+              ? participant
+              : null,
+        )
+        .filter(Boolean);
+      if (!participants.includes(callerId)) {
+        const error = new Error('Bạn không có quyền trong cuộc trò chuyện này');
+        error.statusCode = 403;
+        throw error;
+      }
+      if (conversation.isGroup || participants.length !== 2) {
+        const error = new Error('Cuộc gọi chỉ hỗ trợ trò chuyện 1-1');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const targetUserId = participants.find((participantId) => participantId !== callerId);
+      if (!targetUserId) {
+        const error = new Error('Không tìm thấy người nhận cuộc gọi');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (userActiveCallMap.has(targetUserId)) {
+        const error = new Error('Người nhận đang trong một cuộc gọi khác');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const delivered = emitToUser(targetUserId, 'call:incoming', {
+        callId: normalizedCallId,
+        conversationId: normalizedConversationId,
+        callType: normalizedCallType,
+        caller: { id: callerId, username: callerUsername },
+        offer,
+        conversationTitle: conversation.name || undefined,
+      });
+      if (!delivered) {
+        const error = new Error('Người nhận đang ngoại tuyến');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      activeCalls.set(normalizedCallId, {
+        id: normalizedCallId,
+        conversationId: normalizedConversationId,
+        callType: normalizedCallType,
+        initiatorId: callerId,
+        targetUserId,
+        status: 'ringing',
+      });
+      userActiveCallMap.set(callerId, normalizedCallId);
+      userActiveCallMap.set(targetUserId, normalizedCallId);
+
+      reply({ status: 'ok' });
+    } catch (error) {
+      reply({
+        status: 'error',
+        error: buildErrorMessage(error, 'Không thể bắt đầu cuộc gọi'),
+      });
+    }
+  });
+
+  socket.on('call:answer', async (payload, callback) => {
+    const reply = typeof callback === 'function' ? callback : () => {};
+    try {
+      const { token, callId, answer } = payload ?? {};
+      const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+      if (!normalizedCallId) {
+        const error = new Error('callId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!answer || typeof answer !== 'object') {
+        const error = new Error('Thiếu dữ liệu answer');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const decoded = decodeSocketToken(token);
+      const userId = decoded.id;
+      const username = decoded.username;
+      attachSocketToUser({ socket, userId, username });
+
+      const call = activeCalls.get(normalizedCallId);
+      if (!call) {
+        const error = new Error('Cuộc gọi không tồn tại hoặc đã kết thúc');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (call.targetUserId !== userId) {
+        const error = new Error('Bạn không thể trả lời cuộc gọi này');
+        error.statusCode = 403;
+        throw error;
+      }
+      if (call.status !== 'ringing') {
+        const error = new Error('Cuộc gọi đã được xử lý');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      call.status = 'active';
+      const delivered = emitToUser(call.initiatorId, 'call:answer', {
+        callId: normalizedCallId,
+        answer,
+      });
+      if (!delivered) {
+        releaseCall(normalizedCallId);
+        const error = new Error('Không thể kết nối với người gọi');
+        error.statusCode = 500;
+        throw error;
+      }
+
+      reply({ status: 'ok' });
+    } catch (error) {
+      reply({
+        status: 'error',
+        error: buildErrorMessage(error, 'Không thể trả lời cuộc gọi'),
+      });
+    }
+  });
+
+  socket.on('call:ice-candidate', async (payload, callback) => {
+    const reply = typeof callback === 'function' ? callback : () => {};
+    try {
+      const { token, callId, candidate } = payload ?? {};
+      const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+      if (!normalizedCallId) {
+        const error = new Error('callId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!candidate || typeof candidate !== 'object') {
+        const error = new Error('Thiếu dữ liệu candidate');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const decoded = decodeSocketToken(token);
+      const userId = decoded.id;
+      const username = decoded.username;
+      attachSocketToUser({ socket, userId, username });
+
+      const call = activeCalls.get(normalizedCallId);
+      if (!call) {
+        const error = new Error('Cuộc gọi không tồn tại hoặc đã kết thúc');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (call.initiatorId !== userId && call.targetUserId !== userId) {
+        const error = new Error('Bạn không có quyền với cuộc gọi này');
+        error.statusCode = 403;
+        throw error;
+      }
+
+      const otherUserId = call.initiatorId === userId ? call.targetUserId : call.initiatorId;
+      emitToUser(otherUserId, 'call:ice-candidate', {
+        callId: normalizedCallId,
+        candidate,
+      });
+      reply({ status: 'ok' });
+    } catch (error) {
+      reply({
+        status: 'error',
+        error: buildErrorMessage(error, 'Không thể gửi dữ liệu ICE'),
+      });
+    }
+  });
+
+  socket.on('call:decline', async (payload, callback) => {
+    const reply = typeof callback === 'function' ? callback : () => {};
+    try {
+      const { token, callId } = payload ?? {};
+      const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+      if (!normalizedCallId) {
+        const error = new Error('callId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const decoded = decodeSocketToken(token);
+      const userId = decoded.id;
+      const username = decoded.username;
+      attachSocketToUser({ socket, userId, username });
+
+      const call = activeCalls.get(normalizedCallId);
+      if (!call) {
+        const error = new Error('Cuộc gọi không tồn tại hoặc đã kết thúc');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (call.targetUserId !== userId) {
+        const error = new Error('Bạn không thể từ chối cuộc gọi này');
+        error.statusCode = 403;
+        throw error;
+      }
+
+      releaseCall(normalizedCallId);
+      emitToUser(call.initiatorId, 'call:declined', { callId: normalizedCallId });
+      reply({ status: 'ok' });
+    } catch (error) {
+      reply({
+        status: 'error',
+        error: buildErrorMessage(error, 'Không thể từ chối cuộc gọi'),
+      });
+    }
+  });
+
+  socket.on('call:cancel', async (payload, callback) => {
+    const reply = typeof callback === 'function' ? callback : () => {};
+    try {
+      const { token, callId } = payload ?? {};
+      const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+      if (!normalizedCallId) {
+        const error = new Error('callId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const decoded = decodeSocketToken(token);
+      const userId = decoded.id;
+      const username = decoded.username;
+      attachSocketToUser({ socket, userId, username });
+
+      const call = activeCalls.get(normalizedCallId);
+      if (!call) {
+        const error = new Error('Cuộc gọi không tồn tại hoặc đã kết thúc');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (call.initiatorId !== userId) {
+        const error = new Error('Bạn không thể huỷ cuộc gọi này');
+        error.statusCode = 403;
+        throw error;
+      }
+
+      releaseCall(normalizedCallId);
+      emitToUser(call.targetUserId, 'call:cancelled', { callId: normalizedCallId });
+      reply({ status: 'ok' });
+    } catch (error) {
+      reply({
+        status: 'error',
+        error: buildErrorMessage(error, 'Không thể huỷ cuộc gọi'),
+      });
+    }
+  });
+
+  socket.on('call:end', async (payload, callback) => {
+    const reply = typeof callback === 'function' ? callback : () => {};
+    try {
+      const { token, callId, reason } = payload ?? {};
+      const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+      if (!normalizedCallId) {
+        const error = new Error('callId is required');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const decoded = decodeSocketToken(token);
+      const userId = decoded.id;
+      const username = decoded.username;
+      attachSocketToUser({ socket, userId, username });
+
+      const call = activeCalls.get(normalizedCallId);
+      if (!call) {
+        const error = new Error('Cuộc gọi không tồn tại hoặc đã kết thúc');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (call.initiatorId !== userId && call.targetUserId !== userId) {
+        const error = new Error('Bạn không tham gia cuộc gọi này');
+        error.statusCode = 403;
+        throw error;
+      }
+
+      releaseCall(normalizedCallId);
+      const otherUserId = call.initiatorId === userId ? call.targetUserId : call.initiatorId;
+      emitToUser(otherUserId, 'call:ended', {
+        callId: normalizedCallId,
+        reason: reason || 'ended',
+        endedBy: userId,
+      });
+      reply({ status: 'ok' });
+    } catch (error) {
+      reply({
+        status: 'error',
+        error: buildErrorMessage(error, 'Không thể kết thúc cuộc gọi'),
+      });
+    }
+  });
+
 
   socket.on('disconnect', () => {
-    const userInfo = socketUsers.get(socket.id);
+    const userInfo = detachSocketFromUser(socket.id);
     if (userInfo) {
-      socketUsers.delete(socket.id);
-      onlineUsers.delete(userInfo.userId);
-      // Notify others that user went offline
-      if (ioInstance) {
-        ioInstance.emit('user:offline', { userId: userInfo.userId });
-      }
+      finalizeCallForUser(userInfo.userId, { reason: 'disconnect', endedBy: userInfo.userId });
     }
   });
 };

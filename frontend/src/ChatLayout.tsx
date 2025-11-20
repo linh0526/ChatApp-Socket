@@ -81,6 +81,11 @@ export interface ChatLayoutProps {
     conversationId: string,
     options?: { mode?: 'silent' | 'block' },
   ) => Promise<void>;
+  onAddConversationMembers?: (conversationId: string, memberIds: string[]) => Promise<void>;
+  onStartVoiceCall?: () => void;
+  onStartVideoCall?: () => void;
+  canStartCall?: boolean;
+  callButtonsDisabled?: boolean;
 }
 
 export function ChatLayout({
@@ -130,6 +135,11 @@ export function ChatLayout({
   onSearchMessages,
   onDeleteConversation,
   onLeaveConversation,
+  onAddConversationMembers,
+  onStartVoiceCall,
+  onStartVideoCall,
+  canStartCall,
+  callButtonsDisabled,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -223,11 +233,16 @@ export function ChatLayout({
             onSearchMessages={onSearchMessages}
             onDeleteConversation={onDeleteConversation}
             onLeaveConversation={onLeaveConversation}
+            onAddConversationMembers={onAddConversationMembers}
             isMobile
             onOpenSidebar={() => setMobileSidebarOpen(true)}
             onSendImage={onSendImage}
             onSendFile={onSendFile}
             friends={friends}
+            onStartVoiceCall={onStartVoiceCall}
+            onStartVideoCall={onStartVideoCall}
+            canStartCall={canStartCall}
+            callButtonsDisabled={callButtonsDisabled}
           />
         </>
       ) : (
@@ -260,7 +275,12 @@ export function ChatLayout({
             onSearchMessages={onSearchMessages}
             onDeleteConversation={onDeleteConversation}
             onLeaveConversation={onLeaveConversation}
+            onAddConversationMembers={onAddConversationMembers}
             friends={friends}
+            onStartVoiceCall={onStartVoiceCall}
+            onStartVideoCall={onStartVideoCall}
+            canStartCall={canStartCall}
+            callButtonsDisabled={callButtonsDisabled}
           />
         </>
       )}

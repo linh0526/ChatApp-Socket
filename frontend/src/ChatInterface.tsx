@@ -8,7 +8,9 @@ import {
   Image as ImageIcon,
   Info,
   Link as LinkIcon,
+  Phone,
   Loader2,
+  Video,
   Menu,
   Mic,
   Paperclip,
@@ -18,6 +20,8 @@ import {
   Smile,
   Square,
   Trash2,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -62,6 +66,11 @@ interface ChatInterfaceProps {
     conversationId: string,
     options?: { mode?: 'silent' | 'block' },
   ) => Promise<void>;
+  onAddConversationMembers?: (conversationId: string, memberIds: string[]) => Promise<void>;
+  onStartVoiceCall?: () => void;
+  onStartVideoCall?: () => void;
+  canStartCall?: boolean;
+  callButtonsDisabled?: boolean;
 }
 
 const getInitials = (text: string) =>
@@ -103,6 +112,11 @@ export function ChatInterface({
   onUnarchiveConversation,
   onDeleteConversation,
   onLeaveConversation,
+  onAddConversationMembers,
+  onStartVoiceCall,
+  onStartVideoCall,
+  canStartCall = false,
+  callButtonsDisabled = false,
 }: ChatInterfaceProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastRequestedConversationRef = useRef<string | null>(null);
@@ -127,6 +141,10 @@ export function ChatInterface({
   const [isBlocking, setIsBlocking] = useState(false);
   const [deleteConversationPending, setDeleteConversationPending] = useState(false);
   const [leaveGroupPending, setLeaveGroupPending] = useState<'silent' | 'block' | null>(null);
+  const [addMembersOpen, setAddMembersOpen] = useState(false);
+  const [addMembersLoading, setAddMembersLoading] = useState(false);
+  const [addMembersError, setAddMembersError] = useState<string | null>(null);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
   const conversationDisplay = useMemo<ConversationPreview | null>(() => {
     if (conversation) return conversation;
@@ -181,12 +199,12 @@ export function ChatInterface({
 
   const statusClass = useMemo(() => {
     if (conversationDisplay?.isGroup) {
-      return 'text-slate-500';
+      return 'text-muted-theme';
     }
     if (otherFriend?.isOnline) {
       return 'text-green-600';
     }
-    return 'text-slate-500';
+    return 'text-muted-theme';
   }, [conversationDisplay?.isGroup, otherFriend]);
 
   const otherParticipantIds = useMemo(() => {
@@ -211,6 +229,28 @@ export function ChatInterface({
     }
     return map;
   }, [conversationDisplay?.participants]);
+
+  const participantIdsSet = useMemo(() => {
+    const ids = new Set<string>();
+    for (const participant of conversationDisplay?.participants ?? []) {
+      if (participant?.id) {
+        ids.add(participant.id);
+      }
+    }
+    return ids;
+  }, [conversationDisplay?.participants]);
+
+  const availableFriends = useMemo(
+    () =>
+      friends.filter((friend) => friend.id && !participantIdsSet.has(friend.id)),
+    [friends, participantIdsSet],
+  );
+
+  const participantsForDisplay = conversationDisplay?.participants ?? [];
+  const participantCount = participantsForDisplay.length;
+  const canInviteMembers = Boolean(
+    onAddConversationMembers && conversationDisplay?.isGroup && availableFriends.length > 0,
+  );
 
   const isConversationSelected = Boolean(selectedConversationId);
   const isArchivedConversation = Boolean(conversationDisplay?.isArchived);
@@ -592,6 +632,50 @@ export function ChatInterface({
     }
   };
 
+  const openAddMembersModal = () => {
+    setSelectedMemberIds([]);
+    setAddMembersError(null);
+    setAddMembersOpen(true);
+  };
+
+  const closeAddMembersModal = () => {
+    if (addMembersLoading) {
+      return;
+    }
+    setAddMembersOpen(false);
+    setSelectedMemberIds([]);
+    setAddMembersError(null);
+  };
+
+  const toggleMemberSelection = (friendId: string) => {
+    setSelectedMemberIds((prev) =>
+      prev.includes(friendId) ? prev.filter((id) => id !== friendId) : [...prev, friendId],
+    );
+  };
+
+  const handleAddMembersSubmit = async () => {
+    if (!selectedConversationId || !onAddConversationMembers) {
+      return;
+    }
+    if (selectedMemberIds.length === 0) {
+      setAddMembersError('Vui lòng chọn ít nhất một thành viên.');
+      return;
+    }
+    setAddMembersLoading(true);
+    setAddMembersError(null);
+    try {
+      await onAddConversationMembers(selectedConversationId, selectedMemberIds);
+      setAddMembersOpen(false);
+      setSelectedMemberIds([]);
+      window.alert('Đã thêm thành viên mới vào nhóm');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể thêm thành viên';
+      setAddMembersError(message);
+    } finally {
+      setAddMembersLoading(false);
+    }
+  };
+
   const handleVoiceMessageCancel = async () => {
     if (voiceMessagePending) return;
     setVoiceComposerState('idle');
@@ -662,7 +746,7 @@ export function ChatInterface({
   const renderBody = () => {
     if (!isConversationSelected) {
       return (
-        <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-slate-500">
+        <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-muted-theme">
           <p>Chưa chọn cuộc trò chuyện nào</p>
           <p className="text-sm">Hãy chọn một cuộc trò chuyện từ danh sách bên trái để bắt đầu.</p>
         </div>
@@ -671,7 +755,7 @@ export function ChatInterface({
     
     // Show loading only when actually loading messages
     if (loading && messages.length === 0) {
-      return <p className="text-center text-sm text-slate-500">Đang tải tin nhắn...</p>;
+      return <p className="text-center text-sm text-muted-theme">Đang tải tin nhắn...</p>;
     }
     
     if (messagesError && messages.length === 0) {
@@ -689,7 +773,7 @@ export function ChatInterface({
     
     if (messages.length === 0 && !loading) {
       return (
-        <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-slate-500">
+        <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-muted-theme">
           <p>Chưa có tin nhắn nào trong cuộc trò chuyện này</p>
           <p className="text-sm">Hãy bắt đầu cuộc trò chuyện đầu tiên nhé!</p>
         </div>
@@ -720,7 +804,7 @@ export function ChatInterface({
                 : 'Đã gửi'
               : null;
           const messageStatusClass =
-            messageStatusLabel === 'Đã xem' ? 'text-green-600' : 'text-slate-500';
+            messageStatusLabel === 'Đã xem' ? 'text-green-600' : 'text-muted-theme';
           const shouldHighlight = highlightMessageId === message.id;
           const showRecallAction =
             Boolean(onRecallMessage) && isCurrentUser && !message.isRecalled && !message.error;
@@ -748,7 +832,7 @@ export function ChatInterface({
                 {conversationDisplay?.isGroup && (
                   <span
                     className={`mb-1 text-xs font-semibold ${
-                      isCurrentUser ? 'self-end text-blue-200' : 'text-slate-600'
+                      isCurrentUser ? 'self-end text-blue-200' : 'text-muted-theme'
                     }`}
                   >
                     {isCurrentUser ? 'Bạn' : displayName}
@@ -762,7 +846,7 @@ export function ChatInterface({
                   }`}
                 >
                   {message.isRecalled ? (
-                    <p className="text-sm italic text-slate-500">Tin nhắn đã được thu hồi</p>
+                    <p className="text-sm italic text-muted-theme">Tin nhắn đã được thu hồi</p>
                   ) : message.voiceRecording ? (
                     <div className="flex flex-col gap-2">
                       {message.voiceRecording.dataUrl || message.voiceRecording.url ? (
@@ -775,15 +859,15 @@ export function ChatInterface({
                           Trình duyệt của bạn không hỗ trợ phát tin nhắn thoại.
                         </audio>
                       ) : (
-                        <p className="text-sm text-slate-500">Không thể phát tin nhắn thoại.</p>
+                        <p className="text-sm text-muted-theme">Không thể phát tin nhắn thoại.</p>
                       )}
                       {message.voiceRecording.originalName && (
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-muted-theme">
                           {message.voiceRecording.originalName}
                         </p>
                       )}
                       {message.content && (
-                        <p className="text-xs text-slate-500">{message.content}</p>
+                        <p className="text-xs text-muted-theme">{message.content}</p>
                       )}
                     </div>
                   ) : message.image ? (
@@ -796,25 +880,25 @@ export function ChatInterface({
                           className="max-h-80 w-full max-w-xs rounded-xl object-cover"
                         />
                       ) : (
-                        <p className="text-sm text-slate-500">Không thể hiển thị hình ảnh.</p>
+                        <p className="text-sm text-muted-theme">Không thể hiển thị hình ảnh.</p>
                       )}
                       {message.image.originalName && (
-                        <p className="text-xs text-slate-500">{message.image.originalName}</p>
+                        <p className="text-xs text-muted-theme">{message.image.originalName}</p>
                       )}
                       {message.content && (
-                        <p className="text-sm text-slate-600">{message.content}</p>
+                        <p className="text-sm text-muted-theme">{message.content}</p>
                       )}
                     </div>
                   ) : message.file ? (
                     <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                      <div className="flex items-center gap-3 rounded-2xl border theme-border bg-[var(--surface-bg)] px-3 py-2 shadow-sm transition-colors">
                         <FileText className="size-5 text-blue-500" />
                         <div className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-900">
+                          <span className="text-sm font-semibold text-[var(--text-primary)]">
                             {message.file.originalName || message.file.fileName || 'Tệp đính kèm'}
                           </span>
                           {formatFileSize(message.file.size) && (
-                            <span className="text-xs text-slate-500">
+                            <span className="text-xs text-muted-theme">
                               {formatFileSize(message.file.size)}
                             </span>
                           )}
@@ -833,7 +917,7 @@ export function ChatInterface({
                         )}
                       </div>
                       {message.content && (
-                        <p className="text-sm text-slate-700">{message.content}</p>
+                        <p className="text-sm text-[var(--text-primary)]">{message.content}</p>
                       )}
                     </div>
                   ) : (
@@ -843,14 +927,14 @@ export function ChatInterface({
                     <p className="mt-1 text-xs text-red-600">{message.error}</p>
                   )}
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
+                <div className="mt-1 flex items-center gap-2 text-xs text-subtle-theme">
                   <span>
                     {timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
                   </span>
                   {showRecallAction && (
                     <button
                       type="button"
-                      className="font-semibold text-blue-600 transition hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
+                      className="font-semibold text-blue-600 transition hover:underline disabled:cursor-not-allowed disabled:text-subtle-theme"
                       disabled={recallingMessageId === message.id}
                       onClick={() => handleRecallMessage(message.id)}
                     >
@@ -886,7 +970,7 @@ export function ChatInterface({
               title="Mở danh sách cuộc trò chuyện"
               aria-label="Mở danh sách cuộc trò chuyện"
             >
-              <Menu className="size-5 text-slate-600" />
+              <Menu className="size-5 text-muted-theme" />
             </Button>
           )}
           {isConversationSelected ? (
@@ -936,7 +1020,10 @@ export function ChatInterface({
                       <Search className="size-5 text-blue-500" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-80 bg-white p-4" align="end">
+                  <PopoverContent
+                    className="w-80 border theme-border bg-[var(--surface-bg)] p-4 text-[var(--text-primary)] shadow-lg animate-scale-pop"
+                    align="end"
+                  >
                     <form className="space-y-2" onSubmit={handleSearchSubmit}>
                       <Input
                         ref={searchInputRef}
@@ -976,7 +1063,7 @@ export function ChatInterface({
                       <p className="mt-2 text-xs text-red-600">{searchError}</p>
                     )}
                     {!searchError && hasSearchedMessages && searchResults.length === 0 && (
-                      <p className="mt-2 text-xs text-slate-500">Không tìm thấy tin nhắn phù hợp.</p>
+                      <p className="mt-2 text-xs text-muted-theme">Không tìm thấy tin nhắn phù hợp.</p>
                     )}
                     {searchResults.length > 0 && (
                       <div className="mt-3 max-h-64 space-y-2 overflow-auto pr-1">
@@ -995,11 +1082,11 @@ export function ChatInterface({
                               key={result.id}
                               type="button"
                               onClick={() => handleSelectSearchResult(result.id)}
-                              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+                              className="w-full rounded-lg border theme-border px-3 py-2 text-left text-sm text-[var(--text-primary)] transition hover:bg-blue-500/10"
                             >
-                              <p className="font-semibold text-slate-900">{result.sender || 'Người dùng'}</p>
-                              <p className="text-xs text-slate-500">{resultTime}</p>
-                              <p className="mt-1 truncate text-sm text-slate-600">{snippet}</p>
+                              <p className="font-semibold text-[var(--text-primary)]">{result.sender || 'Người dùng'}</p>
+                              <p className="text-xs text-muted-theme">{resultTime}</p>
+                              <p className="mt-1 truncate text-sm text-muted-theme">{snippet}</p>
                             </button>
                           );
                         })}
@@ -1030,6 +1117,32 @@ export function ChatInterface({
                     )}
                   </Button>
                 )}
+                {canStartCall && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="rounded-full"
+                      onClick={onStartVoiceCall}
+                      disabled={!isConversationSelected || callButtonsDisabled}
+                      title="Gọi thoại"
+                      aria-label="Gọi thoại"
+                    >
+                      <Phone className="size-5 text-blue-500" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="rounded-full"
+                      onClick={onStartVideoCall}
+                      disabled={!isConversationSelected || callButtonsDisabled}
+                      title="Gọi video"
+                      aria-label="Gọi video"
+                    >
+                      <Video className="size-5 text-blue-500" />
+                    </Button>
+                  </>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1044,8 +1157,10 @@ export function ChatInterface({
           ) : (
           <div className="flex w-full items-center justify-between">
             <div>
-              <h3 className="text-base font-semibold text-slate-900">Chưa chọn cuộc trò chuyện</h3>
-              <p className="text-sm text-slate-500">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">
+                Chưa chọn cuộc trò chuyện
+              </h3>
+              <p className="text-sm text-muted-theme">
                 Hãy chọn một cuộc trò chuyện từ danh sách để xem tin nhắn.
               </p>
             </div>
@@ -1067,7 +1182,7 @@ export function ChatInterface({
           </SheetHeader>
           <ScrollArea className="flex-1 min-h-0">
             <div className="space-y-6 px-6 py-6">
-              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <section className="surface-card p-4 animate-fade-slide">
                 <div className="flex items-center gap-3">
                   <Avatar className="size-12">
                     <AvatarFallback className="bg-blue-500 text-lg font-semibold text-white">
@@ -1076,23 +1191,24 @@ export function ChatInterface({
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <p className="text-base font-semibold text-slate-900">
+                    <p className="text-base font-semibold text-[var(--text-primary)]">
                       {nicknameDisplay || conversationDisplay?.title || 'Cuộc trò chuyện'}
                     </p>
-                    <p className="text-sm text-slate-500">{statusLabel || 'Đang hoạt động'}</p>
+                    <p className="text-sm text-muted-theme">{statusLabel || 'Đang hoạt động'}</p>
                   </div>
                 </div>
                 {otherFriend && (
-                  <p className="mt-3 text-xs text-slate-500">
-                    Email: <span className="font-medium text-slate-700">{otherFriend.email}</span>
+                  <p className="mt-3 text-xs text-muted-theme">
+                    Email:{' '}
+                    <span className="font-medium text-[var(--text-primary)]">{otherFriend.email}</span>
                   </p>
                 )}
               </section>
 
               {conversationDisplay?.isGroup ? (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
-                  <h3 className="text-sm font-semibold text-slate-900">Rời nhóm</h3>
-                  <p className="text-xs text-slate-500">
+                <section className="surface-card p-4 animate-fade-slide">
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">Rời nhóm</h3>
+                  <p className="text-xs text-muted-theme">
                     Thoát khỏi nhóm theo cách bạn muốn. Rời trong im lặng sẽ không gửi thông báo;
                     &quot;Rời và chặn&quot; sẽ chặn bạn được thêm lại (mô phỏng).
                   </p>
@@ -1125,11 +1241,11 @@ export function ChatInterface({
                   </div>
                 </section>
               ) : (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <section className="surface-card p-4 animate-fade-slide">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-sm font-semibold text-slate-900">Chặn người dùng</h3>
-                      <p className="text-xs text-slate-500">
+                      <h3 className="text-sm font-semibold text-[var(--text-primary)]">Chặn người dùng</h3>
+                      <p className="text-xs text-muted-theme">
                         {blockedUser
                           ? 'Người dùng này đang bị chặn. Bạn sẽ không nhận tin nhắn (mô phỏng).'
                           : 'Ngăn người này nhắn tin hoặc gọi cho bạn (mô phỏng).'}
@@ -1138,7 +1254,7 @@ export function ChatInterface({
                     <Button
                       type="button"
                       variant={blockedUser ? 'outline' : 'ghost'}
-                      className={blockedUser ? 'text-slate-700' : 'text-red-600'}
+                      className={blockedUser ? 'text-[var(--text-primary)]' : 'text-red-600'}
                       onClick={handleToggleBlockUser}
                       disabled={isBlocking}
                     >
@@ -1153,9 +1269,73 @@ export function ChatInterface({
                 </section>
               )}
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h3 className="text-sm font-semibold text-slate-900">Biệt danh</h3>
-                <p className="text-xs text-slate-500">
+              {conversationDisplay?.isGroup && (
+                <section className="surface-card p-4 animate-fade-slide">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[var(--text-primary)]">Thành viên</h3>
+                      <p className="text-xs text-muted-theme">{participantCount} thành viên</p>
+                    </div>
+                    {onAddConversationMembers && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="rounded-full"
+                        onClick={openAddMembersModal}
+                        disabled={!canInviteMembers}
+                        title={
+                          canInviteMembers
+                            ? 'Thêm thành viên mới'
+                            : 'Không còn bạn bè nào để thêm'
+                        }
+                      >
+                        <UserPlus className="mr-2 size-4" />
+                        Thêm
+                      </Button>
+                    )}
+                  </div>
+                  <div className="mt-3 max-h-60 space-y-2 overflow-y-auto pr-2">
+                    {participantCount === 0 ? (
+                      <p className="text-sm text-muted-theme">Chưa có thành viên nào.</p>
+                    ) : (
+                      participantsForDisplay.map((participant) => (
+                        <div
+                          key={participant?.id ?? participant?.email ?? participant?.username}
+                          className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-3 py-2 text-sm"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Avatar className="size-8">
+                              <AvatarFallback className="bg-blue-500 text-white">
+                                {getInitials(participant?.username ?? participant?.email ?? 'U')}
+                              </AvatarFallback>
+                              {participant?.avatarUrl ? (
+                                <AvatarImage src={participant.avatarUrl} alt={participant.username} />
+                              ) : null}
+                            </Avatar>
+                            <div>
+                              <p className="text-sm font-semibold text-[var(--text-primary)]">
+                                {participant?.username ?? 'Người dùng'}
+                                {participant?.id && participant.id === currentUserId ? (
+                                  <span className="ml-2 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600">
+                                    Bạn
+                                  </span>
+                                ) : null}
+                              </p>
+                              {participant?.email ? (
+                                <p className="text-xs text-muted-theme">{participant.email}</p>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </section>
+              )}
+
+              <section className="surface-card p-4 animate-fade-slide">
+                <h3 className="text-sm font-semibold text-[var(--text-primary)]">Biệt danh</h3>
+                <p className="text-xs text-muted-theme">
                   Đặt tên riêng để dễ tìm kiếm cuộc trò chuyện này trên thiết bị của bạn.
                 </p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -1170,13 +1350,15 @@ export function ChatInterface({
                 </div>
               </section>
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <section className="surface-card p-4 animate-fade-slide">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-slate-900">File & phương tiện</h3>
-                  <span className="text-xs text-slate-500">{mediaMessages.length}</span>
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+                    File & phương tiện
+                  </h3>
+                  <span className="text-xs text-muted-theme">{mediaMessages.length}</span>
                 </div>
                 {mediaMessages.length === 0 ? (
-                  <p className="mt-3 text-xs text-slate-500">
+                  <p className="mt-3 text-xs text-muted-theme">
                     Chưa có file hoặc phương tiện nào trong cuộc trò chuyện này.
                   </p>
                 ) : (
@@ -1205,11 +1387,11 @@ export function ChatInterface({
                       return (
                         <div
                           key={message.id}
-                          className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                          className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-3 py-2 text-sm transition-colors"
                         >
                           <div>
-                            <p className="font-semibold text-slate-900">{name}</p>
-                            <p className="text-xs text-slate-500">
+                            <p className="font-semibold text-[var(--text-primary)]">{name}</p>
+                            <p className="text-xs text-muted-theme">
                               {typeLabel} • {formatDateTime(message.createdAt)}
                             </p>
                           </div>
@@ -1228,13 +1410,13 @@ export function ChatInterface({
                 )}
               </section>
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <section className="surface-card p-4 animate-fade-slide">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-slate-900">Liên kết</h3>
-                  <span className="text-xs text-slate-500">{linkMessages.length}</span>
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">Liên kết</h3>
+                  <span className="text-xs text-muted-theme">{linkMessages.length}</span>
                 </div>
                 {linkMessages.length === 0 ? (
-                  <p className="mt-3 text-xs text-slate-500">
+                  <p className="mt-3 text-xs text-muted-theme">
                     Chưa có liên kết nào được chia sẻ.
                   </p>
                 ) : (
@@ -1242,11 +1424,13 @@ export function ChatInterface({
                     {linkMessages.map((link) => (
                       <div
                         key={link.id}
-                        className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                        className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-3 py-2 text-sm transition-colors"
                       >
                         <div className="min-w-0 pr-3">
-                          <p className="truncate font-semibold text-slate-900">{link.url}</p>
-                          <p className="text-xs text-slate-500">
+                          <p className="truncate font-semibold text-[var(--text-primary)]">
+                            {link.url}
+                          </p>
+                          <p className="text-xs text-muted-theme">
                             {link.sender ?? 'Người dùng'} • {formatDateTime(link.createdAt)}
                           </p>
                         </div>
@@ -1261,7 +1445,7 @@ export function ChatInterface({
                 )}
               </section>
 
-              <section className="rounded-xl border border-red-200 bg-red-50 p-4">
+              <section className="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-500/10">
                 <h3 className="text-sm font-semibold text-red-800">Xoá cuộc trò chuyện</h3>
                 <p className="text-xs text-red-700">
                   Hành động này không thể hoàn tác. {conversationDisplay?.isGroup
@@ -1348,12 +1532,12 @@ export function ChatInterface({
                 </div>
               <Input
                 type="text"
-                placeholder={isConversationSelected ? "Aa" : "Chọn cuộc trò chuyện để nhắn tin"}
+                placeholder={isConversationSelected ? 'Aa' : 'Chọn cuộc trò chuyện để nhắn tin'}
                 value={inputValue}
                 onChange={(event) => onInputChange(event.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={sending || !isConversationSelected}
-                className="flex-1 min-w-0 rounded-full bg-white"
+                className="flex-1 min-w-0 rounded-full border border-transparent bg-[var(--surface-bg)] text-[var(--text-primary)] transition-colors focus-visible:border-blue-500/50"
               />
                 <div className="flex items-center gap-2">
                   <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
@@ -1370,7 +1554,10 @@ export function ChatInterface({
                         <Smile className="size-4" />
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-64 bg-white p-2" align="end">
+                  <PopoverContent
+                    className="w-64 border theme-border bg-[var(--surface-bg)] p-2 text-[var(--text-primary)] shadow-lg animate-scale-pop"
+                    align="end"
+                  >
                       <div className="grid grid-cols-8 gap-2">
                         {[
                           '😀',
@@ -1487,7 +1674,7 @@ export function ChatInterface({
 
           {voiceComposerState === 'review' && (
             <>
-              <div className="flex flex-1 items-center justify-between rounded-full bg-slate-100 px-4 py-3 text-sm text-slate-600">
+              <div className="flex flex-1 items-center justify-between rounded-full bg-[var(--composer-bg)] px-4 py-3 text-sm text-muted-theme">
                 <span>{voiceRecordingReady ? 'Ghi âm sẵn sàng để gửi' : 'Đang xử lý ghi âm...'}</span>
               </div>
               <Button
@@ -1514,6 +1701,88 @@ export function ChatInterface({
           )}
         </div>
       </div>
+
+      {addMembersOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop)] px-4 py-6">
+          <div className="glass-panel w-full max-w-lg rounded-[28px] p-6 text-[var(--text-primary)] animate-scale-pop">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">Thêm thành viên vào nhóm</h3>
+                <p className="text-sm text-muted-theme">
+                  Chọn bạn bè để mời vào cuộc trò chuyện này.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeAddMembersModal}
+                className="rounded-full p-2 text-subtle-theme transition hover:bg-blue-500/10"
+                aria-label="Đóng"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-[320px] space-y-3 overflow-y-auto pr-2">
+              {availableFriends.length === 0 ? (
+                <div className="rounded-xl border border-dashed theme-border px-4 py-5 text-center text-sm text-muted-theme">
+                  Bạn không còn bạn bè nào có thể thêm.
+                </div>
+              ) : (
+                availableFriends.map((friend) => (
+                  <label
+                    key={friend.id}
+                    className="flex cursor-pointer items-center gap-3 rounded-xl border theme-border bg-[var(--surface-bg)] px-3 py-2 text-sm transition hover:border-blue-300 dark:hover:border-blue-500"
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-blue-500"
+                      checked={selectedMemberIds.includes(friend.id)}
+                      onChange={() => toggleMemberSelection(friend.id)}
+                      disabled={addMembersLoading}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-[var(--text-primary)]">
+                        {friend.username}
+                      </p>
+                      {friend.email ? (
+                        <p className="text-xs text-muted-theme">{friend.email}</p>
+                      ) : null}
+                    </div>
+                  </label>
+                ))
+              )}
+            </div>
+
+            {addMembersError && (
+              <p className="mt-4 text-sm text-red-600 dark:text-red-400">{addMembersError}</p>
+            )}
+
+            <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" className="rounded-full" onClick={closeAddMembersModal} disabled={addMembersLoading}>
+                Huỷ
+              </Button>
+              <Button
+                type="button"
+                className="rounded-full"
+                onClick={handleAddMembersSubmit}
+                disabled={addMembersLoading || selectedMemberIds.length === 0}
+              >
+                {addMembersLoading ? (
+                  <>
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                    Đang thêm...
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="mr-2 size-4" />
+                    Thêm thành viên
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

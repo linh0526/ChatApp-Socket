@@ -8,6 +8,7 @@ const {
   unarchiveConversation,
   deleteConversation,
   leaveConversation,
+  addConversationMembers,
 } = require('../controllers/conversationController');
 
 const router = express.Router();
@@ -19,6 +20,7 @@ router.post('/:conversationId/archive', auth, archiveConversation);
 router.delete('/:conversationId/archive', auth, unarchiveConversation);
 router.delete('/:conversationId', auth, deleteConversation);
 router.post('/:conversationId/leave', auth, leaveConversation);
+router.post('/:conversationId/members', auth, addConversationMembers);
 
 module.exports = router;
 

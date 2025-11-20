@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, CameraOff, Mic, MicOff, PhoneIncoming, PhoneOff } from 'lucide-react';
 import { io, type Socket } from 'socket.io-client';
 import { AuthProvider, useAuth } from './AuthContext';
 import { authHeaders, getToken } from './auth';
@@ -77,6 +78,52 @@ type ConversationResponse = {
   createdAt?: string;
   isArchived?: boolean;
   archivedAt?: string | null;
+};
+
+type CallType = 'audio' | 'video';
+type CallDirection = 'incoming' | 'outgoing';
+type CallStatus = 'ringing' | 'connecting' | 'active';
+
+type CallSession = {
+  callId: string;
+  conversationId: string;
+  callType: CallType;
+  otherUser: {
+    id: string;
+    username: string;
+  };
+  direction: CallDirection;
+  status: CallStatus;
+  conversationTitle?: string;
+};
+
+type IncomingCallPayload = {
+  callId: string;
+  conversationId: string;
+  callType: CallType;
+  caller: {
+    id: string;
+    username: string;
+  };
+  offer: RTCSessionDescriptionInit;
+  conversationTitle?: string;
+};
+
+type CallAnswerPayload = {
+  callId: string;
+  answer: RTCSessionDescriptionInit;
+};
+
+type CallIceCandidatePayload = {
+  callId: string;
+  candidate: RTCIceCandidateInit;
+};
+
+const RTC_CONFIGURATION: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
 };
 
 const sortMessagesAsc = (items: Message[]) =>
@@ -197,6 +244,21 @@ function Chat() {
   const voiceMessageBlobRef = useRef<Blob | null>(null);
   const [voiceMessagePending, setVoiceMessagePending] = useState(false);
   const [voiceRecordingReady, setVoiceRecordingReady] = useState(false);
+  const [callSession, setCallSession] = useState<CallSession | null>(null);
+  const [showCallOverlay, setShowCallOverlay] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [localMediaStream, setLocalMediaStream] = useState<MediaStream | null>(null);
+  const [remoteMediaStream, setRemoteMediaStream] = useState<MediaStream | null>(null);
+  const [callMuted, setCallMuted] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [callDuration, setCallDuration] = useState(0);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const callSessionRef = useRef<CallSession | null>(null);
+  const localCallStreamRef = useRef<MediaStream | null>(null);
+  const remoteCallStreamRef = useRef<MediaStream | null>(null);
+  const pendingRemoteCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const incomingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
+  const callTimerRef = useRef<number | null>(null);
 
   const assetBaseUrl = useMemo(() => {
     if (API_BASE_URL) {
@@ -1718,6 +1780,74 @@ function Chat() {
     [token, user?.id, updateConversations, fetchMessages],
   );
 
+  const addMembersToConversation = useCallback(
+    async (conversationId: string, memberIds: string[]) => {
+      if (!token) {
+        throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      }
+      if (!conversationId) {
+        throw new Error('Không xác định được cuộc trò chuyện.');
+      }
+      if (!Array.isArray(memberIds) || memberIds.length === 0) {
+        throw new Error('Vui lòng chọn ít nhất một thành viên.');
+      }
+
+      const endpoint = `${API_BASE_URL}/api/conversations/${conversationId}/members`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ memberIds }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error ?? 'Không thể thêm thành viên mới');
+      }
+      const updatedPreview = mapConversationResponse(payload, user?.id);
+      setConversations((prev) =>
+        sortConversations([
+          ...prev.filter((conversation) => conversation.id !== updatedPreview.id),
+          updatedPreview,
+        ]),
+      );
+      setArchivedConversations((prev) => {
+        const others = prev.filter((conversation) => conversation.id !== updatedPreview.id);
+        if (updatedPreview.isArchived) {
+          return sortConversations([...others, updatedPreview]);
+        }
+        return others;
+      });
+    },
+    [token, user?.id],
+  );
+
+  const activeConversation = useMemo<ConversationPreview | null>(() => {
+    if (!selectedConversationId) {
+      return null;
+    }
+    return (
+      conversations.find((conversation) => conversation.id === selectedConversationId) ??
+      archivedConversations.find((conversation) => conversation.id === selectedConversationId) ??
+      null
+    );
+  }, [archivedConversations, conversations, selectedConversationId]);
+
+  const callTargetParticipant = useMemo(() => {
+    if (!activeConversation || !user?.id) {
+      return null;
+    }
+    if (activeConversation.isGroup) {
+      return null;
+    }
+    const participants = activeConversation.participants ?? [];
+    if (participants.length < 2) {
+      return null;
+    }
+    return participants.find((participant) => participant.id && participant.id !== user.id) ?? null;
+  }, [activeConversation, user?.id]);
+
+  const canStartCall = Boolean(callTargetParticipant && selectedConversationId);
+  const callButtonsDisabled = Boolean(callSession);
+
   const chatMessages = useMemo<ChatMessage[]>(() => {
     const result: ChatMessage[] = messages.map((message) => mapToChatMessage(message));
 
@@ -1741,6 +1871,452 @@ function Chat() {
     return result.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [messages, pendingMessages, user?.username, user?.id, mapToChatMessage]);
 
+  useEffect(() => {
+    callSessionRef.current = callSession;
+  }, [callSession]);
+
+  const emitCallEvent = useCallback(
+    async (eventName: string, payload: Record<string, unknown>) => {
+      const socket = socketRef.current;
+      if (!socket?.connected) {
+        throw new Error('Không thể kết nối tới máy chủ tín hiệu');
+      }
+      await new Promise<void>((resolve, reject) => {
+        socket
+          .timeout(10000)
+          .emit(
+            eventName,
+            { token: getToken(), ...payload },
+            (err: unknown, response: { status: 'ok' | 'error'; error?: string } | undefined) => {
+              if (err) {
+                reject(err instanceof Error ? err : new Error('Tín hiệu quá hạn'));
+                return;
+              }
+              if (response && response.status === 'error') {
+                reject(new Error(response.error || 'Không thể xử lý tín hiệu'));
+                return;
+              }
+              resolve();
+            },
+          );
+      });
+    },
+    [],
+  );
+
+  const cleanupCallState = useCallback(() => {
+    if (callTimerRef.current) {
+      window.clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    pendingRemoteCandidatesRef.current = [];
+    incomingOfferRef.current = null;
+    callSessionRef.current = null;
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    if (localCallStreamRef.current) {
+      localCallStreamRef.current.getTracks().forEach((track) => track.stop());
+      localCallStreamRef.current = null;
+    }
+    if (remoteCallStreamRef.current) {
+      remoteCallStreamRef.current.getTracks().forEach((track) => track.stop());
+      remoteCallStreamRef.current = null;
+    }
+    setLocalMediaStream(null);
+    setRemoteMediaStream(null);
+    setCallSession(null);
+    setCallError(null);
+    setCallDuration(0);
+    setCallMuted(false);
+    setCameraEnabled(true);
+    setShowCallOverlay(false);
+  }, []);
+
+  const requestMediaStream = useCallback(async (type: CallType) => {
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Trình duyệt của bạn không hỗ trợ cuộc gọi');
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: type === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+    });
+    localCallStreamRef.current = stream;
+    setLocalMediaStream(stream);
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = true;
+    });
+    if (type === 'video') {
+      stream.getVideoTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      setCameraEnabled(true);
+    } else {
+      setCameraEnabled(false);
+    }
+    setCallMuted(false);
+    return stream;
+  }, []);
+
+  const createPeerConnection = useCallback(
+    (callId: string) => {
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.onicecandidate = null;
+        peerConnectionRef.current.ontrack = null;
+        peerConnectionRef.current.onconnectionstatechange = null;
+        peerConnectionRef.current.close();
+      }
+      const pc = new RTCPeerConnection(RTC_CONFIGURATION);
+      peerConnectionRef.current = pc;
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          const candidatePayload = event.candidate.toJSON();
+          void emitCallEvent('call:ice-candidate', {
+            callId,
+            candidate: candidatePayload,
+          }).catch((error) => {
+            console.error('Failed to send ICE candidate:', error);
+          });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        const [stream] = event.streams;
+        if (stream) {
+          remoteCallStreamRef.current = stream;
+          setRemoteMediaStream(stream);
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+        if (state === 'connected') {
+          setCallSession((prev) => (prev ? { ...prev, status: 'active' } : prev));
+          if (!callTimerRef.current) {
+            callTimerRef.current = window.setInterval(() => {
+              setCallDuration((value) => value + 1);
+            }, 1000);
+          }
+        }
+        if (state === 'failed') {
+          setCallError('Kết nối bị gián đoạn');
+        }
+        if (state === 'disconnected') {
+          setCallError('Kết nối đã bị ngắt');
+        }
+      };
+
+      return pc;
+    },
+    [emitCallEvent],
+  );
+
+  const initiateCall = useCallback(
+    async (type: CallType) => {
+      if (!selectedConversationId) {
+        window.alert('Vui lòng chọn một cuộc trò chuyện trước khi gọi.');
+        return;
+      }
+      if (!token) {
+        window.alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        return;
+      }
+      if (!callTargetParticipant?.id) {
+        window.alert('Không thể xác định người nhận cuộc gọi.');
+        return;
+      }
+      if (callSessionRef.current) {
+        window.alert('Bạn đang trong một cuộc gọi khác.');
+        return;
+      }
+      try {
+        const callId =
+          typeof window !== 'undefined' &&
+          window.crypto &&
+          typeof window.crypto.randomUUID === 'function'
+            ? window.crypto.randomUUID()
+            : `call-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const session: CallSession = {
+          callId,
+          conversationId: selectedConversationId,
+          callType: type,
+          otherUser: {
+            id: callTargetParticipant.id,
+            username: callTargetParticipant.username,
+          },
+          direction: 'outgoing',
+          status: 'ringing',
+          conversationTitle: activeConversation?.title,
+        };
+        setCallSession(session);
+        callSessionRef.current = session;
+        setShowCallOverlay(true);
+        setCallError(null);
+        setCallDuration(0);
+        pendingRemoteCandidatesRef.current = [];
+        const stream = await requestMediaStream(type);
+        const pc = createPeerConnection(callId);
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: type === 'video',
+        });
+        await pc.setLocalDescription(offer);
+        await emitCallEvent('call:initiate', {
+          callId,
+          conversationId: selectedConversationId,
+          callType: type,
+          offer,
+          targetUserId: callTargetParticipant.id,
+        });
+      } catch (error) {
+        console.error('initiateCall error:', error);
+        const message = error instanceof Error ? error.message : 'Không thể bắt đầu cuộc gọi';
+        window.alert(message);
+        cleanupCallState();
+      }
+    },
+    [
+      activeConversation?.title,
+      callTargetParticipant,
+      createPeerConnection,
+      emitCallEvent,
+      requestMediaStream,
+      selectedConversationId,
+      token,
+      cleanupCallState,
+    ],
+  );
+
+  const startVoiceCall = useCallback(() => {
+    void initiateCall('audio');
+  }, [initiateCall]);
+
+  const startVideoCall = useCallback(() => {
+    void initiateCall('video');
+  }, [initiateCall]);
+
+  const answerIncomingCall = useCallback(async () => {
+    const session = callSessionRef.current;
+    const offer = incomingOfferRef.current;
+    if (!session || session.direction !== 'incoming' || !offer) {
+      return;
+    }
+    try {
+      const stream = await requestMediaStream(session.callType);
+      const pc = createPeerConnection(session.callId);
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      await pc.setRemoteDescription(offer);
+      const queued = [...pendingRemoteCandidatesRef.current];
+      pendingRemoteCandidatesRef.current = [];
+      for (const candidate of queued) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (candidateError) {
+          console.error('Failed to add queued ICE candidate:', candidateError);
+        }
+      }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      setCallSession((prev) => (prev ? { ...prev, status: 'connecting' } : prev));
+      incomingOfferRef.current = null;
+      await emitCallEvent('call:answer', {
+        callId: session.callId,
+        answer,
+      });
+    } catch (error) {
+      console.error('answerIncomingCall error:', error);
+      const message = error instanceof Error ? error.message : 'Không thể trả lời cuộc gọi';
+      window.alert(message);
+      cleanupCallState();
+    }
+  }, [createPeerConnection, emitCallEvent, requestMediaStream, cleanupCallState]);
+
+  const declineIncomingCall = useCallback(async () => {
+    const session = callSessionRef.current;
+    if (!session) {
+      return;
+    }
+    try {
+      await emitCallEvent('call:decline', { callId: session.callId });
+    } catch (error) {
+      console.error('declineIncomingCall error:', error);
+    } finally {
+      cleanupCallState();
+    }
+  }, [emitCallEvent, cleanupCallState]);
+
+  const hangupCall = useCallback(async () => {
+    const session = callSessionRef.current;
+    if (!session) {
+      return;
+    }
+    try {
+      if (session.direction === 'outgoing' && session.status === 'ringing') {
+        await emitCallEvent('call:cancel', { callId: session.callId });
+      } else {
+        await emitCallEvent('call:end', { callId: session.callId, reason: 'ended' });
+      }
+    } catch (error) {
+      console.error('hangupCall error:', error);
+    } finally {
+      cleanupCallState();
+    }
+  }, [emitCallEvent, cleanupCallState]);
+
+  const toggleMute = useCallback(() => {
+    const stream = localCallStreamRef.current;
+    if (!stream) {
+      return;
+    }
+    const nextMuted = !callMuted;
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = !nextMuted;
+    });
+    setCallMuted(nextMuted);
+  }, [callMuted]);
+
+  const toggleCamera = useCallback(() => {
+    const stream = localCallStreamRef.current;
+    if (!stream) {
+      return;
+    }
+    const nextEnabled = !cameraEnabled;
+    stream.getVideoTracks().forEach((track) => {
+      track.enabled = nextEnabled;
+    });
+    setCameraEnabled(nextEnabled);
+  }, [cameraEnabled]);
+
+  const handleCallIncoming = useCallback(
+    (payload: IncomingCallPayload) => {
+      if (!payload?.callId || !payload.offer) {
+        return;
+      }
+      if (callSessionRef.current) {
+        void emitCallEvent('call:decline', { callId: payload.callId }).catch(() => {});
+        return;
+      }
+      pendingRemoteCandidatesRef.current = [];
+      incomingOfferRef.current = payload.offer;
+      const session: CallSession = {
+        callId: payload.callId,
+        conversationId: payload.conversationId,
+        callType: payload.callType,
+        otherUser: {
+          id: payload.caller?.id ?? '',
+          username: payload.caller?.username ?? 'Người dùng',
+        },
+        direction: 'incoming',
+        status: 'ringing',
+        conversationTitle: payload.conversationTitle,
+      };
+      callSessionRef.current = session;
+      setCallSession(session);
+      setShowCallOverlay(true);
+      setCallDuration(0);
+      setCallError(null);
+    },
+    [emitCallEvent],
+  );
+
+  const handleCallAnswer = useCallback(
+    async (payload: CallAnswerPayload) => {
+      const session = callSessionRef.current;
+      if (!session || session.callId !== payload?.callId) {
+        return;
+      }
+      const pc = peerConnectionRef.current;
+      if (!pc || !payload.answer) {
+        return;
+      }
+      try {
+        await pc.setRemoteDescription(payload.answer);
+        const queued = [...pendingRemoteCandidatesRef.current];
+        pendingRemoteCandidatesRef.current = [];
+        for (const candidate of queued) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (candidateError) {
+            console.error('Failed to add queued ICE candidate:', candidateError);
+          }
+        }
+        setCallSession((prev) => (prev ? { ...prev, status: 'connecting' } : prev));
+      } catch (error) {
+        console.error('handleCallAnswer error:', error);
+        window.alert('Không thể thiết lập cuộc gọi.');
+        cleanupCallState();
+      }
+    },
+    [cleanupCallState],
+  );
+
+  const handleCallIceCandidate = useCallback(async (payload: CallIceCandidatePayload) => {
+    const session = callSessionRef.current;
+    if (!session || session.callId !== payload?.callId || !payload?.candidate) {
+      return;
+    }
+    const pc = peerConnectionRef.current;
+    if (!pc || !pc.remoteDescription) {
+      pendingRemoteCandidatesRef.current.push(payload.candidate);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+    } catch (error) {
+      console.error('Failed to add ICE candidate:', error);
+    }
+  }, []);
+
+  const handleCallDeclined = useCallback(
+    (payload: { callId?: string }) => {
+      const session = callSessionRef.current;
+      if (!session || session.callId !== payload?.callId) {
+        return;
+      }
+      cleanupCallState();
+      window.alert('Người nhận đã từ chối cuộc gọi.');
+    },
+    [cleanupCallState],
+  );
+
+  const handleCallCancelled = useCallback(
+    (payload: { callId?: string }) => {
+      const session = callSessionRef.current;
+      if (!session || session.callId !== payload?.callId) {
+        return;
+      }
+      cleanupCallState();
+      window.alert('Người gọi đã huỷ cuộc gọi.');
+    },
+    [cleanupCallState],
+  );
+
+  const handleCallEnded = useCallback(
+    (payload: { callId?: string; reason?: string; endedBy?: string }) => {
+      const session = callSessionRef.current;
+      if (!session || session.callId !== payload?.callId) {
+        return;
+      }
+      const endedBySelf = payload?.endedBy && payload.endedBy === user?.id;
+      cleanupCallState();
+      if (endedBySelf) {
+        return;
+      }
+      if (payload?.reason === 'disconnect') {
+        window.alert('Cuộc gọi đã kết thúc do mất kết nối.');
+      } else {
+        window.alert('Cuộc gọi đã kết thúc.');
+      }
+    },
+    [cleanupCallState, user?.id],
+  );
+
   const handleSelectConversation = useCallback((id: string) => {
     if (id === selectedConversationId) return; // Avoid unnecessary re-renders
     setSelectedConversationId(id);
@@ -1759,6 +2335,13 @@ function Chat() {
     );
   }, [selectedConversationId, updateConversations]);
 
+  useEffect(
+    () => () => {
+      cleanupCallState();
+    },
+    [cleanupCallState],
+  );
+
   // Removed duplicate auto-select logic - handled in fetchConversations
 
   useEffect(() => {
@@ -1768,6 +2351,12 @@ function Chat() {
       console.error('fetchArchivedConversations error:', err),
     );
   }, [token, fetchConversations, fetchArchivedConversations]);
+
+  useEffect(() => {
+    if (!token) {
+      cleanupCallState();
+    }
+  }, [token, cleanupCallState]);
 
   useEffect(() => {
     if (!token) {
@@ -1915,6 +2504,12 @@ function Chat() {
     socket.on('user:online', handleUserOnline);
     socket.on('user:offline', handleUserOffline);
     socket.on('message:seen', handleMessageSeen);
+    socket.on('call:incoming', handleCallIncoming);
+    socket.on('call:answer', handleCallAnswer);
+    socket.on('call:ice-candidate', handleCallIceCandidate);
+    socket.on('call:declined', handleCallDeclined);
+    socket.on('call:cancelled', handleCallCancelled);
+    socket.on('call:ended', handleCallEnded);
 
     if (socket.connected) {
       handleConnect();
@@ -1944,13 +2539,38 @@ function Chat() {
     socket.off('user:online');
     socket.off('user:offline');
     socket.off('message:seen');
+    socket.off('call:incoming');
+    socket.off('call:answer');
+    socket.off('call:ice-candidate');
+    socket.off('call:declined');
+    socket.off('call:cancelled');
+    socket.off('call:ended');
 
     socket.on('message:new', handleIncomingMessage);
     socket.on('message:updated', handleMessageUpdated);
     socket.on('user:online', handleUserOnline);
     socket.on('user:offline', handleUserOffline);
     socket.on('message:seen', handleMessageSeen);
-  }, [token, handleIncomingMessage, handleMessageUpdated, handleUserOnline, handleUserOffline, handleMessageSeen]);
+    socket.on('call:incoming', handleCallIncoming);
+    socket.on('call:answer', handleCallAnswer);
+    socket.on('call:ice-candidate', handleCallIceCandidate);
+    socket.on('call:declined', handleCallDeclined);
+    socket.on('call:cancelled', handleCallCancelled);
+    socket.on('call:ended', handleCallEnded);
+  }, [
+    token,
+    handleIncomingMessage,
+    handleMessageUpdated,
+    handleUserOnline,
+    handleUserOffline,
+    handleMessageSeen,
+    handleCallIncoming,
+    handleCallAnswer,
+    handleCallIceCandidate,
+    handleCallDeclined,
+    handleCallCancelled,
+    handleCallEnded,
+  ]);
 
 
   const sendMessage = async () => {
@@ -2070,10 +2690,10 @@ function Chat() {
 
   return (
     <div className="flex h-screen flex-col bg-slate-100">
-      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
-        <h1 className="text-lg font-semibold text-slate-900">Chat App</h1>
+      <div className="flex items-center justify-between border-b theme-border bg-[var(--surface-bg)] px-6 py-4 shadow-sm transition-colors">
+        <h1 className="text-lg font-semibold text-[var(--text-primary)]">Chat App</h1>
         <button
-          className="rounded-full bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+          className="rounded-full bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
           onClick={logout}
           type="button"
         >
@@ -2128,7 +2748,246 @@ function Chat() {
           onSearchMessages={searchConversationMessages}
           onDeleteConversation={deleteConversation}
           onLeaveConversation={leaveConversation}
+          onAddConversationMembers={addMembersToConversation}
+          onStartVoiceCall={startVoiceCall}
+          onStartVideoCall={startVideoCall}
+          canStartCall={canStartCall}
+          callButtonsDisabled={callButtonsDisabled}
         />
+      </div>
+      {callSession && showCallOverlay && (
+        <CallOverlay
+          session={callSession}
+          localStream={localMediaStream}
+          remoteStream={remoteMediaStream}
+          muted={callMuted}
+          cameraEnabled={cameraEnabled}
+          callError={callError}
+          durationSeconds={callDuration}
+          onHangup={hangupCall}
+          onAnswer={
+            callSession.direction === 'incoming' && callSession.status === 'ringing'
+              ? answerIncomingCall
+              : undefined
+          }
+          onDecline={
+            callSession.direction === 'incoming' && callSession.status === 'ringing'
+              ? declineIncomingCall
+              : undefined
+          }
+          onToggleMute={toggleMute}
+          onToggleCamera={
+            callSession.callType === 'video' && callSession.status !== 'ringing'
+              ? toggleCamera
+              : undefined
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+type CallOverlayProps = {
+  session: CallSession;
+  localStream: MediaStream | null;
+  remoteStream: MediaStream | null;
+  muted: boolean;
+  cameraEnabled: boolean;
+  callError?: string | null;
+  durationSeconds: number;
+  onHangup: () => void;
+  onAnswer?: () => void;
+  onDecline?: () => void;
+  onToggleMute: () => void;
+  onToggleCamera?: () => void;
+};
+
+function CallOverlay({
+  session,
+  localStream,
+  remoteStream,
+  muted,
+  cameraEnabled,
+  callError,
+  durationSeconds,
+  onHangup,
+  onAnswer,
+  onDecline,
+  onToggleMute,
+  onToggleCamera,
+}: CallOverlayProps) {
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream ?? null;
+    }
+  }, [remoteStream]);
+
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream ?? null;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject =
+        session.callType === 'audio' ? remoteStream ?? null : null;
+    }
+  }, [remoteStream, session.callType]);
+
+  const formatDuration = (totalSeconds: number) => {
+    if (totalSeconds <= 0) return '';
+    const minutes = Math.floor(totalSeconds / 60)
+      .toString()
+      .padStart(2, '0');
+    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${minutes}:${seconds}`;
+  };
+
+  const statusText = callError
+    ? callError
+    : session.status === 'active'
+      ? `Đang trò chuyện${durationSeconds > 0 ? ` • ${formatDuration(durationSeconds)}` : ''}`
+      : session.status === 'connecting'
+        ? 'Đang kết nối...'
+        : session.direction === 'incoming'
+          ? 'Cuộc gọi đến...'
+          : 'Đang gọi...';
+
+  const renderVideoPreview = () => (
+    <div className="relative min-h-[260px] overflow-hidden rounded-2xl bg-slate-900 text-white dark:bg-slate-800/80">
+      <video
+        ref={remoteVideoRef}
+        autoPlay
+        playsInline
+        className="h-full w-full object-cover"
+      />
+      {localStream && (
+        <video
+          ref={localVideoRef}
+          autoPlay
+          muted
+          playsInline
+          className="absolute bottom-4 right-4 h-32 w-24 rounded-xl border-2 border-white/70 object-cover shadow-lg"
+        />
+      )}
+    </div>
+  );
+
+  const renderVoicePreview = () => (
+    <div className="flex min-h-[220px] flex-col items-center justify-center gap-4 rounded-2xl bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 text-white dark:from-blue-900 dark:via-indigo-900 dark:to-purple-900">
+      <div className="flex size-24 items-center justify-center rounded-full bg-white/10 text-3xl font-semibold backdrop-blur">
+        {getInitials(session.otherUser.username || 'U')}
+      </div>
+      <p className="text-lg font-semibold">{session.otherUser.username}</p>
+    </div>
+  );
+
+  const renderActionButtons = () => {
+    if (session.direction === 'incoming' && session.status === 'ringing') {
+      return (
+        <>
+          <button
+            type="button"
+            onClick={onDecline}
+            className="flex items-center gap-2 rounded-full bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700"
+          >
+            <PhoneOff className="size-4" />
+            Từ chối
+          </button>
+          <button
+            type="button"
+            onClick={onAnswer}
+            className="flex items-center gap-2 rounded-full bg-green-500 px-6 py-3 font-semibold text-white transition hover:bg-green-600"
+          >
+            <PhoneIncoming className="size-4" />
+            Nghe máy
+          </button>
+        </>
+      );
+    }
+
+    if (session.direction === 'outgoing' && session.status === 'ringing') {
+      return (
+        <button
+          type="button"
+          onClick={onHangup}
+          className="flex items-center gap-2 rounded-full bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700"
+        >
+          <PhoneOff className="size-4" />
+          Huỷ cuộc gọi
+        </button>
+      );
+    }
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={onToggleMute}
+          className={`flex items-center gap-2 rounded-full px-6 py-3 font-semibold text-white transition ${
+            muted ? 'bg-slate-400 hover:bg-slate-500' : 'bg-blue-600 hover:bg-blue-700'
+          }`}
+        >
+          {muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+          {muted ? 'Bật mic' : 'Tắt mic'}
+        </button>
+        {session.callType === 'video' && onToggleCamera ? (
+          <button
+            type="button"
+            onClick={onToggleCamera}
+            className={`flex items-center gap-2 rounded-full px-6 py-3 font-semibold text-white transition ${
+              cameraEnabled ? 'bg-slate-600 hover:bg-slate-700' : 'bg-slate-400 hover:bg-slate-500'
+            }`}
+          >
+            {cameraEnabled ? <Camera className="size-4" /> : <CameraOff className="size-4" />}
+            {cameraEnabled ? 'Tắt camera' : 'Bật camera'}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onHangup}
+          className="flex items-center gap-2 rounded-full bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700"
+        >
+          <PhoneOff className="size-4" />
+          Kết thúc
+        </button>
+      </>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop)] px-4 py-6">
+      <div className="glass-panel w-full max-w-3xl rounded-[32px] p-6 text-[var(--text-primary)] animate-scale-pop">
+        <div className="space-y-6">
+          <div className="text-center">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-theme">
+              {session.callType === 'video' ? 'Video call' : 'Voice call'}
+            </p>
+            <h3 className="mt-1 text-2xl font-semibold text-[var(--text-primary)]">
+              {session.otherUser.username}
+            </h3>
+            <p className="text-sm text-muted-theme">{statusText}</p>
+            {session.conversationTitle && (
+              <p className="text-xs text-subtle-theme">{session.conversationTitle}</p>
+            )}
+          </div>
+
+          {session.callType === 'video' ? renderVideoPreview() : renderVoicePreview()}
+          {session.callType === 'audio' ? (
+            <audio ref={remoteAudioRef} autoPlay className="hidden" />
+          ) : null}
+
+          {callError ? <p className="text-center text-sm text-red-600">{callError}</p> : null}
+
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {renderActionButtons()}
+          </div>
+        </div>
       </div>
     </div>
   );

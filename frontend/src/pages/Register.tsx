@@ -31,22 +31,22 @@ export default function Register({ goLogin, goChat }: RegisterProps) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-panel">
+    <div className="flex min-h-screen items-center justify-center bg-[var(--app-bg)] px-4 transition-colors">
+      <div className="glass-panel w-full max-w-md rounded-2xl p-8 text-[var(--text-primary)] animate-scale-pop">
         <div className="space-y-2 text-center">
-          <h1 className="text-2xl font-semibold text-slate-900">Đăng ký</h1>
-          <p className="text-sm text-slate-500">Tạo tài khoản để bắt đầu trò chuyện</p>
+          <h1 className="text-2xl font-semibold">Đăng ký</h1>
+          <p className="text-sm text-muted-theme">Tạo tài khoản để bắt đầu trò chuyện</p>
         </div>
 
         {error && (
-          <div className="mt-6 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+          <div className="mt-6 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-500/10">
             {error}
           </div>
         )}
 
         <form className="mt-6 space-y-5" onSubmit={submit}>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700" htmlFor="register-username">
+            <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="register-username">
               Username
             </label>
             <Input
@@ -61,7 +61,7 @@ export default function Register({ goLogin, goChat }: RegisterProps) {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700" htmlFor="register-email">
+            <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="register-email">
               Email
             </label>
             <Input
@@ -77,7 +77,7 @@ export default function Register({ goLogin, goChat }: RegisterProps) {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700" htmlFor="register-password">
+            <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="register-password">
               Mật khẩu
             </label>
             <Input

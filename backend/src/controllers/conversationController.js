@@ -322,4 +322,88 @@ exports.leaveConversation = async (req, res) => {
   }
 };
 
+exports.addConversationMembers = async (req, res) => {
+  try {
+    const { conversationId } = req.params || {};
+    const { memberIds } = req.body || {};
+
+    if (!conversationId) {
+      return res.status(400).json({ error: 'conversationId is required' });
+    }
+
+    if (!Array.isArray(memberIds) || memberIds.length === 0) {
+      return res.status(400).json({ error: 'memberIds phải là mảng và không rỗng' });
+    }
+
+    const normalizedMembers = [...new Set(memberIds.map((id) => String(id).trim()).filter(Boolean))];
+    if (normalizedMembers.length === 0) {
+      return res.status(400).json({ error: 'Không có thành viên hợp lệ để thêm' });
+    }
+
+    const conversation = await Conversation.findById(conversationId).populate(
+      'participants',
+      'username email',
+    );
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    if (!conversation.isGroup) {
+      return res.status(400).json({ error: 'Chỉ có thể thêm thành viên trong nhóm' });
+    }
+
+    const userId = req.user.id;
+    const isParticipant = (conversation.participants ?? []).some(
+      (participant) => normalizeObjectId(participant?.id ?? participant?._id ?? participant) === userId,
+    );
+    if (!isParticipant) {
+      return res.status(403).json({ error: 'Bạn không thuộc nhóm này' });
+    }
+
+    const currentParticipantIds = new Set(
+      (conversation.participants ?? []).map((participant) =>
+        normalizeObjectId(participant?.id ?? participant?._id ?? participant),
+      ),
+    );
+
+    const membersToAdd = normalizedMembers.filter((memberId) => !currentParticipantIds.has(memberId));
+    if (membersToAdd.length === 0) {
+      return res.status(400).json({ error: 'Tất cả các thành viên đã có trong nhóm' });
+    }
+
+    const existingUsers = await User.find({ _id: { $in: membersToAdd } })
+      .select('_id')
+      .lean();
+    const validIds = new Set(existingUsers.map((user) => user._id.toString()));
+    const invalidIds = membersToAdd.filter((memberId) => !validIds.has(memberId));
+    if (invalidIds.length > 0) {
+      return res.status(404).json({ error: 'Một số người dùng không tồn tại', invalidIds });
+    }
+
+    conversation.participants = [
+      ...conversation.participants.map((participant) =>
+        normalizeObjectId(participant?.id ?? participant?._id ?? participant),
+      ),
+      ...membersToAdd,
+    ];
+
+    const membersToAddSet = new Set(membersToAdd);
+    conversation.blockedParticipants = (conversation.blockedParticipants ?? []).filter(
+      (entry) => !membersToAddSet.has(normalizeObjectId(entry?.user)),
+    );
+
+    conversation.markModified('participants');
+    conversation.markModified('blockedParticipants');
+    conversation.updatedAt = new Date();
+
+    await conversation.save();
+    await conversation.populate('participants', 'username email');
+
+    const payload = serializeConversation(conversation, userId);
+    return res.json(payload);
+  } catch (err) {
+    console.error('addConversationMembers error:', err);
+    return res.status(500).json({ error: 'Không thể thêm thành viên vào nhóm' });
+  }
+};
+
 

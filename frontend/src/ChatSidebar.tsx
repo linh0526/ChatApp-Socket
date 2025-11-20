@@ -385,7 +385,7 @@ export function ChatSidebar({
     <div className="chat-sidebar">
       <div className="p-4">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-900">{sectionTitle}</h2>
+          <h2 className="text-lg font-semibold text-[var(--text-primary)]">{sectionTitle}</h2>
           {activeSection === 'conversations' && (
             <div className="flex items-center gap-2">
               <Popover
@@ -400,16 +400,19 @@ export function ChatSidebar({
                     <MoreHorizontal className="size-5" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-56 p-2 bg-white" align="end">
+                <PopoverContent
+                  className="w-56 border theme-border bg-[var(--surface-bg)] p-2 text-[var(--text-primary)] shadow-lg animate-scale-pop"
+                  align="end"
+                >
                   <div className="flex flex-col">
                     <button
                       type="button"
                       onClick={handleOpenArchived}
-                      className="rounded-md px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-slate-100"
+                      className="rounded-md px-3 py-2 text-left text-sm text-muted-theme transition hover:bg-slate-100"
                     >
                       Tin nhắn lưu trữ
                       {archivedConversations.length > 0 && (
-                        <span className="ml-2 inline-flex items-center justify-center rounded-full bg-slate-200 px-2 text-xs font-semibold text-slate-600">
+                        <span className="ml-2 inline-flex items-center justify-center rounded-full bg-slate-200 px-2 text-xs font-semibold text-muted-theme">
                           {archivedConversations.length}
                         </span>
                       )}
@@ -417,7 +420,7 @@ export function ChatSidebar({
                     <button
                       type="button"
                       onClick={() => setOptionsExpanded((prev) => !prev)}
-                      className="flex items-center justify-between rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 transition"
+                      className="flex items-center justify-between rounded-md px-3 py-2 text-left text-sm font-semibold text-[var(--text-primary)] transition"
                     >
                       <span>Tuỳ chọn</span>
                       <ChevronDown
@@ -425,11 +428,11 @@ export function ChatSidebar({
                       />
                     </button>
                     {optionsExpanded && (
-                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-sm">
+                      <div className="mt-2 surface-card p-3 text-sm shadow-sm animate-fade-slide">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="font-medium text-slate-800">Chế độ tối</p>
-                            <p className="text-xs text-slate-500">
+                            <p className="font-medium text-[var(--text-primary)]">Chế độ tối</p>
+                            <p className="text-xs text-muted-theme">
                               Bật giao diện nền tối cho toàn bộ ứng dụng.
                             </p>
                           </div>
@@ -439,7 +442,7 @@ export function ChatSidebar({
                             className={`flex items-center rounded-full px-3 py-1 text-xs font-semibold transition ${
                               isDarkMode
                                 ? 'bg-blue-600 text-white'
-                                : 'bg-slate-200 text-slate-700'
+                                : 'bg-slate-200 text-[var(--text-primary)]'
                             }`}
                           >
                             {isDarkMode ? (
@@ -466,8 +469,11 @@ export function ChatSidebar({
                     <SquarePen className="size-5" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="flex h-[22rem] w-80 flex-col bg-white p-0" align="end">
-                  <div className="border-b border-gray-200 p-3">
+                <PopoverContent
+                  className="flex h-[22rem] w-80 flex-col border theme-border bg-[var(--surface-bg)] p-0 shadow-xl animate-scale-pop"
+                  align="end"
+                >
+                  <div className="border-b theme-border p-3">
                     <Button
                       type="button"
                       variant="ghost"
@@ -488,7 +494,7 @@ export function ChatSidebar({
                     <ScrollArea className="flex-1">
                       <div className="px-2 pb-2">
                         {friends.length === 0 ? (
-                          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-muted-theme dark:border-slate-600 dark:bg-slate-800/30">
                             Bạn chưa có bạn bè nào để bắt đầu cuộc trò chuyện mới.
                           </div>
                         ) : (
@@ -519,13 +525,13 @@ export function ChatSidebar({
                               </div>
                               <div className="flex-1 text-left">
                                 <div className="flex items-center gap-2">
-                                  <p className="text-sm text-slate-900">{friend.username}</p>
+                                  <p className="text-sm text-[var(--text-primary)]">{friend.username}</p>
                                   {friend.isOnline && (
                                     <span className="text-xs text-green-600 font-medium">Online</span>
                                   )}
                                 </div>
                                 {friend.email && (
-                                  <p className="text-xs text-slate-500">{friend.email}</p>
+                                  <p className="text-xs text-muted-theme">{friend.email}</p>
                                 )}
                               </div>
                             </button>
@@ -583,7 +589,7 @@ export function ChatSidebar({
           <>
             <div className="mt-4 flex justify-center">
               <div className="relative w-full">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle-theme" />
                 <Input
                   type="text"
                   placeholder="Tìm kiếm trên chat"
@@ -619,7 +625,7 @@ export function ChatSidebar({
         {activeSection === 'friends' && (
           <form className="mt-4 flex gap-2" onSubmit={handleFriendSearchSubmit}>
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle-theme" />
               <Input
                 type="text"
                 placeholder="Tìm kiếm bạn bè theo tên hoặc email"
@@ -639,7 +645,7 @@ export function ChatSidebar({
         {activeSection === 'conversations' && (
           <>
             {filteredConversations.length === 0 ? (
-              <div className="px-6 py-8 text-center text-sm text-slate-500">
+              <div className="px-6 py-8 text-center text-sm text-muted-theme">
                 Không tìm thấy cuộc trò chuyện phù hợp
               </div>
             ) : (
@@ -684,7 +690,7 @@ export function ChatSidebar({
                                 void handleArchiveConversationClick(conversation.id);
                               }
                             }}
-                            className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            className="rounded-full p-1 text-subtle-theme transition hover:bg-blue-500/10 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                             aria-label="Lưu trữ cuộc trò chuyện"
                           >
                             {archivingConversationId === conversation.id ? (
@@ -729,16 +735,16 @@ export function ChatSidebar({
 
             {friendSearchQuery.trim().length > 0 && (
               <div>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-theme">
                   Kết quả tìm kiếm
                 </h3>
                 {searching ? (
-                  <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                  <div className="flex items-center gap-2 rounded-lg border theme-border bg-[var(--surface-bg)] px-4 py-3 text-sm text-muted-theme shadow-sm transition-colors">
                     <Loader2 className="size-4 animate-spin text-blue-500" />
                     Đang tìm kiếm...
                   </div>
                 ) : searchResults.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-muted-theme dark:border-slate-600 dark:bg-slate-800/30">
                     Không tìm thấy người dùng phù hợp
                   </div>
                 ) : (
@@ -746,11 +752,11 @@ export function ChatSidebar({
                     {searchResults.map((user) => (
                       <div
                         key={user.id}
-                        className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3"
+                        className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-4 py-3 shadow-sm"
                       >
                         <div>
-                          <p className="text-sm font-medium text-slate-900">{user.username}</p>
-                          <p className="text-xs text-slate-500">{user.email}</p>
+                          <p className="text-sm font-medium text-[var(--text-primary)]">{user.username}</p>
+                          <p className="text-xs text-muted-theme">{user.email}</p>
                         </div>
                         <Button
                           type="button"
@@ -770,11 +776,11 @@ export function ChatSidebar({
             )}
 
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-theme">
                 Bạn bè
               </h3>
               {friends.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm text-muted-theme dark:border-slate-600 dark:bg-slate-800/30">
                   Bạn chưa có bạn bè nào. Hãy tìm và kết bạn để trò chuyện riêng tư.
                 </div>
               ) : (
@@ -782,7 +788,7 @@ export function ChatSidebar({
                   {friends.map((friend) => (
                     <div
                       key={friend.id}
-                      className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3"
+                      className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-4 py-3 shadow-sm"
                     >
                       <div className="flex items-center gap-3">
                         <div className="relative">
@@ -797,12 +803,14 @@ export function ChatSidebar({
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-slate-900">{friend.username}</p>
+                            <p className="text-sm font-medium text-[var(--text-primary)]">
+                              {friend.username}
+                            </p>
                             {friend.isOnline && (
                               <span className="text-xs text-green-600 font-medium">Online</span>
                             )}
                           </div>
-                          <p className="text-xs text-slate-500">{friend.email}</p>
+                          <p className="text-xs text-muted-theme">{friend.email}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -845,11 +853,11 @@ export function ChatSidebar({
         {activeSection === 'requests' && (
           <div className="flex h-full flex-col gap-4 px-4 py-4">
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-theme">
                 Lời mời đến
               </h3>
               {incomingRequests.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm text-muted-theme dark:border-slate-600 dark:bg-slate-800/30">
                   Bạn chưa có lời mời kết bạn nào.
                 </div>
               ) : (
@@ -857,11 +865,13 @@ export function ChatSidebar({
                   {incomingRequests.map((request) => (
                     <div
                       key={request.id}
-                      className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3"
+                      className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-4 py-3 shadow-sm"
                     >
                       <div>
-                        <p className="text-sm font-medium text-slate-900">{request.user.username}</p>
-                        <p className="text-xs text-slate-500">{request.user.email}</p>
+                        <p className="text-sm font-medium text-[var(--text-primary)]">
+                          {request.user.username}
+                        </p>
+                        <p className="text-xs text-muted-theme">{request.user.email}</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
@@ -893,11 +903,11 @@ export function ChatSidebar({
             </div>
 
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-theme">
                 Đã gửi
               </h3>
               {outgoingRequests.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm text-muted-theme dark:border-slate-600 dark:bg-slate-800/30">
                   Bạn chưa gửi lời mời nào.
                 </div>
               ) : (
@@ -905,11 +915,13 @@ export function ChatSidebar({
                   {outgoingRequests.map((request) => (
                     <div
                       key={request.id}
-                      className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3"
+                      className="flex items-center justify-between rounded-lg border theme-border bg-[var(--surface-bg)] px-4 py-3 shadow-sm"
                     >
                       <div>
-                        <p className="text-sm font-medium text-slate-900">{request.user.username}</p>
-                        <p className="text-xs text-slate-500">{request.user.email}</p>
+                        <p className="text-sm font-medium text-[var(--text-primary)]">
+                          {request.user.username}
+                        </p>
+                        <p className="text-xs text-muted-theme">{request.user.email}</p>
                       </div>
                       <Button
                         type="button"
@@ -933,27 +945,32 @@ export function ChatSidebar({
 
       {archivedOpen && (
         <div
-          className="fixed inset-0 z-40 flex items-stretch justify-end bg-black/40 p-0 sm:p-6"
+          className="fixed inset-0 z-40 flex items-stretch justify-end bg-[var(--overlay-backdrop)] p-0 sm:p-6"
           onClick={handleCloseArchived}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="archived-conversations-title"
-            className="flex h-full w-full max-w-full flex-col overflow-hidden bg-white shadow-2xl sm:max-w-lg sm:rounded-l-3xl"
+            className="glass-panel flex h-full w-full max-w-full flex-col overflow-hidden sm:max-w-lg sm:rounded-l-3xl animate-scale-pop"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+            <div className="flex items-center justify-between border-b theme-border px-6 py-4">
               <div>
-                <h2 id="archived-conversations-title" className="text-lg font-semibold text-slate-900">
+                <h2
+                  id="archived-conversations-title"
+                  className="text-lg font-semibold text-[var(--text-primary)]"
+                >
                   Tin nhắn đã lưu trữ
                 </h2>
-                <p className="text-sm text-slate-500">Quản lý các cuộc trò chuyện đã lưu trữ của bạn.</p>
+                <p className="text-sm text-muted-theme">
+                  Quản lý các cuộc trò chuyện đã lưu trữ của bạn.
+                </p>
               </div>
               <button
                 type="button"
                 onClick={handleCloseArchived}
-                className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100"
+                className="rounded-full p-2 text-muted-theme transition hover:bg-blue-500/10"
               >
                 <X className="size-4" />
                 <span className="sr-only">Đóng</span>
@@ -968,12 +985,12 @@ export function ChatSidebar({
               )}
 
               {archivedLoading ? (
-                <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
+                <div className="flex flex-1 items-center justify-center text-sm text-muted-theme">
                   <Loader2 className="mr-2 size-4 animate-spin text-blue-500" />
                   Đang tải danh sách tin nhắn lưu trữ...
                 </div>
               ) : archivedConversations.length === 0 ? (
-                <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center text-sm text-slate-500">
+                <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center text-sm text-muted-theme">
                   Bạn chưa lưu trữ cuộc trò chuyện nào.
                 </div>
               ) : (
@@ -984,11 +1001,11 @@ export function ChatSidebar({
                       return (
                         <div
                           key={conversation.id}
-                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                          className="flex items-center justify-between rounded-xl border theme-border bg-[var(--surface-bg)] px-4 py-3 shadow-sm transition-colors"
                         >
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">{conversation.title}</p>
-                            <p className="text-xs text-slate-500">
+                            <p className="text-sm font-semibold text-[var(--text-primary)]">{conversation.title}</p>
+                            <p className="text-xs text-muted-theme">
                               Lưu trữ lúc:{' '}
                               {conversation.archivedAt
                                 ? formatTimestamp(conversation.archivedAt)
@@ -1037,24 +1054,24 @@ export function ChatSidebar({
 
       {createGroupOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop)] p-4"
           onClick={closeGroupModal}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-group-title"
-            className="relative flex h-full max-h-[90vh] w-full max-w-[95vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:max-w-3xl"
+            className="glass-panel relative flex h-full max-h-[90vh] w-full max-w-[95vw] flex-col overflow-hidden rounded-xl sm:max-w-3xl animate-scale-pop"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
-              <h2 id="create-group-title" className="text-left text-[18px] font-semibold text-slate-900">
+            <div className="flex items-center justify-between gap-3 border-b theme-border px-6 py-4">
+              <h2 id="create-group-title" className="text-left text-[18px] font-semibold text-[var(--text-primary)]">
                 Tạo nhóm
               </h2>
               <button
                 type="button"
                 onClick={closeGroupModal}
-                className="rounded-full p-1.5 text-slate-400 transition"
+                className="rounded-full p-1.5 text-subtle-theme transition"
               >
                 <X className="size-4" />
                 <span className="sr-only">Đóng</span>
@@ -1071,7 +1088,7 @@ export function ChatSidebar({
                   value={groupName}
                   onChange={(event) => setGroupName(event.target.value)}
                   placeholder="Nhập tên nhóm"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus-visible:ring-1 focus-visible:ring-blue-500"
+                  className="w-full rounded-lg border theme-border px-3 py-2 text-sm focus-visible:ring-1 focus-visible:ring-blue-500/60"
                 />
               </div>
               <div className="mt-4">
@@ -1080,18 +1097,18 @@ export function ChatSidebar({
                   value={groupSearchQuery}
                   onChange={(event) => setGroupSearchQuery(event.target.value)}
                   placeholder="Nhập tên người dùng"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus-visible:ring-1 focus-visible:ring-blue-500"
+                  className="w-full rounded-lg border theme-border px-3 py-2 text-sm focus-visible:ring-1 focus-visible:ring-blue-500/60"
                 />
               </div>
             </div>
 
             <div className="flex-1 overflow-hidden px-6">
               <div className="pb-2">
-                <h3 className="text-sm font-medium text-slate-700">Trò chuyện gần đây</h3>
+                <h3 className="text-sm font-medium text-[var(--text-primary)]">Trò chuyện gần đây</h3>
               </div>
               <div className="space-y-2">
                 {recentConversationPreviews.length === 0 ? (
-                  <p className="text-sm text-slate-500">Chưa có cuộc trò chuyện phù hợp.</p>
+                  <p className="text-sm text-muted-theme">Chưa có cuộc trò chuyện phù hợp.</p>
                 ) : (
                   recentConversationPreviews.map((conversation) => (
                     <button
@@ -1099,11 +1116,11 @@ export function ChatSidebar({
                       type="button"
                       className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left text-sm transition"
                     >
-                      <span className="truncate font-medium text-slate-900">
+                      <span className="truncate font-medium text-[var(--text-primary)]">
                         {conversation.title}
                       </span>
                       {conversation.updatedAt && (
-                        <span className="text-xs text-slate-400">
+                        <span className="text-xs text-subtle-theme">
                           {formatTimestamp(conversation.updatedAt)}
                         </span>
                       )}
@@ -1113,9 +1130,9 @@ export function ChatSidebar({
               </div>
 
               <div className="mt-6 flex-1 overflow-hidden">
-                <h3 className="mb-3 text-sm font-medium text-slate-700">Danh bạ</h3>
+                <h3 className="mb-3 text-sm font-medium text-[var(--text-primary)]">Danh bạ</h3>
               <div className="mb-2 flex items-center justify-between text-xs">
-                <span className="text-slate-500">Đã chọn {selectedGroupCount} thành viên</span>
+                <span className="text-muted-theme">Đã chọn {selectedGroupCount} thành viên</span>
                 <span
                   className={`font-medium ${
                     selectedGroupCount < 2 ? 'text-red-500' : 'text-green-600'
@@ -1127,7 +1144,7 @@ export function ChatSidebar({
                 <ScrollArea className="h-full">
                   <div className="space-y-4 pb-4">
                     {groupedFriendEntries.length === 0 ? (
-                      <p className="text-sm text-slate-500">
+                      <p className="text-sm text-muted-theme">
                         {friends.length === 0
                           ? 'Bạn chưa có bạn bè trong danh sách.'
                           : 'Không tìm thấy bạn bè phù hợp với tìm kiếm.'}
@@ -1135,7 +1152,7 @@ export function ChatSidebar({
                     ) : (
                       groupedFriendEntries.map(([letter, items]) => (
                         <div key={letter} className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-subtle-theme">
                             {letter}
                           </p>
                           <div className="space-y-2">
@@ -1169,7 +1186,7 @@ export function ChatSidebar({
                                   </div>
                                   <div className="flex-1">
                                     <div className="flex items-center gap-2">
-                                      <p className="text-sm font-medium text-slate-900">
+                                      <p className="text-sm font-medium text-[var(--text-primary)]">
                                         {friend.username}
                                       </p>
                                       {friend.isOnline && (
@@ -1177,7 +1194,7 @@ export function ChatSidebar({
                                       )}
                                     </div>
                                     {friend.email && (
-                                      <p className="text-xs text-slate-500">{friend.email}</p>
+                                      <p className="text-xs text-muted-theme">{friend.email}</p>
                                     )}
                                   </div>
                                 </div>
@@ -1185,7 +1202,7 @@ export function ChatSidebar({
                                   className={`flex size-5 items-center justify-center rounded-full border transition ${
                                     isSelected
                                       ? 'border-blue-500 bg-blue-500 text-white'
-                                      : 'border-slate-300 text-slate-400'
+                                      : 'border-slate-300 text-subtle-theme'
                                   }`}
                                 >
                                   <Check className="size-3" />
