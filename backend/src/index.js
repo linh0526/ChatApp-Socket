@@ -12,6 +12,7 @@ const authRoutes = require('./routes/authRoutes');
 const conversationRoutes = require('./routes/conversationRoutes');
 const friendRoutes = require('./routes/friendRoutes');
 const userRoutes = require('./routes/userRoutes');
+const webrtcRoutes = require('./routes/webrtcRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -31,6 +32,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/webrtc', webrtcRoutes);
 
 
 const PORT = process.env.PORT || 5000;

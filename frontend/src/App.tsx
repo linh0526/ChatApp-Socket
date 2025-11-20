@@ -51,7 +51,7 @@ type Message = {
   content: string;
   createdAt: string;
   conversation?: string | null;
-  messageType?: 'text' | 'voice' | 'image' | 'file';
+  messageType?: 'text' | 'voice' | 'image' | 'file' | 'call';
   voiceRecording?: VoiceRecording | null;
   image?: Image | null;
   file?: FileAttachment | null;
@@ -120,12 +120,11 @@ type CallIceCandidatePayload = {
   candidate: RTCIceCandidateInit;
 };
 
-const RTC_CONFIGURATION: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
-};
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+];
 
 const sortMessagesAsc = (items: Message[]) =>
   [...items].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -253,6 +252,7 @@ function Chat() {
   const [callMuted, setCallMuted] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [callDuration, setCallDuration] = useState(0);
+  const [iceServers, setIceServers] = useState<RTCIceServer[]>(DEFAULT_ICE_SERVERS);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const callSessionRef = useRef<CallSession | null>(null);
   const localCallStreamRef = useRef<MediaStream | null>(null);
@@ -270,6 +270,54 @@ function Chat() {
     }
     return '';
   }, []);
+
+  const rtcConfiguration = useMemo<RTCConfiguration>(
+    () => ({
+      iceServers,
+      iceTransportPolicy: 'all',
+    }),
+    [iceServers],
+  );
+
+  useEffect(() => {
+    if (!token) {
+      setIceServers(DEFAULT_ICE_SERVERS);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const loadIceServers = async () => {
+      const endpoint =
+        API_BASE_URL && API_BASE_URL.length > 0
+          ? `${API_BASE_URL}/api/webrtc/ice-servers`
+          : '/api/webrtc/ice-servers';
+      try {
+        const response = await fetch(endpoint, {
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to load ICE servers (${response.status})`);
+        }
+        const data = (await response.json()) as { iceServers?: RTCIceServer[] };
+        if (!cancelled && Array.isArray(data?.iceServers) && data.iceServers.length > 0) {
+          setIceServers(data.iceServers);
+        } else if (!cancelled) {
+          setIceServers(DEFAULT_ICE_SERVERS);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Falling back to default ICE servers', error);
+          setIceServers(DEFAULT_ICE_SERVERS);
+        }
+      }
+    };
+    loadIceServers();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [token]);
 
   const withVoiceUrl = useCallback(
     (message: Message): Message => {
@@ -1972,7 +2020,7 @@ function Chat() {
         peerConnectionRef.current.onconnectionstatechange = null;
         peerConnectionRef.current.close();
       }
-      const pc = new RTCPeerConnection(RTC_CONFIGURATION);
+      const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
 
       pc.onicecandidate = (event) => {
@@ -2015,7 +2063,7 @@ function Chat() {
 
       return pc;
     },
-    [emitCallEvent],
+    [emitCallEvent, rtcConfiguration],
   );
 
   const initiateCall = useCallback(
