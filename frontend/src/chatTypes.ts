@@ -34,7 +34,7 @@ export interface ChatMessage {
   conversation?: string | null;
   error?: string;
   isPending?: boolean;
-  messageType?: 'text' | 'voice' | 'image' | 'file';
+  messageType?: 'text' | 'voice' | 'image' | 'file' | 'call';
   voiceRecording?: VoiceRecordingPayload | null;
   image?: ImagePayload | null;
   file?: FilePayload | null;
@@ -42,5 +42,6 @@ export interface ChatMessage {
   isRecalled?: boolean;
   recalledAt?: string | null;
   recalledBy?: string | null;
+  metadata?: Record<string, unknown>;
 }
 

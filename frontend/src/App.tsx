@@ -59,6 +59,7 @@ type Message = {
   isRecalled?: boolean;
   recalledAt?: string | null;
   recalledBy?: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 type ConversationParticipantResponse = {
@@ -384,6 +385,7 @@ function Chat() {
       isRecalled: message.isRecalled ?? false,
       recalledAt: message.recalledAt ?? undefined,
       recalledBy: message.recalledBy ?? undefined,
+      metadata: message.metadata ?? undefined,
     }),
     [],
   );

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode } from 'react';
 import {
   Archive,
   ArchiveRestore,
@@ -32,6 +32,79 @@ import type { ConversationPreview } from './ChatLayout';
 import type { ChatMessage } from './chatTypes';
 import type { FriendSummary } from './friendTypes';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+
+const extractUrls = (text?: string | null) => {
+  if (typeof text !== 'string' || !text.trim()) {
+    return [];
+  }
+  const matches = text.match(/https?:\/\/[^\s]+/gi);
+  return matches ?? [];
+};
+
+const renderTextWithLinks = (text?: string | null) => {
+  if (!text) {
+    return null;
+  }
+  const nodes: Array<string | ReactNode> = [];
+  const regex = /https?:\/\/[^\s]+/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const start = match.index;
+    const url = match[0];
+    if (start > lastIndex) {
+      nodes.push(text.slice(lastIndex, start));
+    }
+    nodes.push(
+      <a
+        key={`url-${start}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 underline break-words"
+      >
+        {url}
+      </a>,
+    );
+    lastIndex = start + url.length;
+  }
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes.map((segment, index) =>
+    typeof segment === 'string' ? (
+      <span key={`segment-${index}`}>{segment}</span>
+    ) : (
+      segment
+    ),
+  );
+};
+
+const LinkPreviewCard = ({ url }: { url: string }) => {
+  let hostname = url;
+  try {
+    const parsed = new URL(url);
+    hostname = parsed.hostname;
+  } catch {
+    // ignore invalid URL
+  }
+  return (
+    <div className="mt-2 rounded-xl border theme-border bg-[var(--surface-bg)] p-3 text-left text-sm shadow-sm">
+      <p className="text-sm font-semibold text-[var(--text-primary)]">{hostname}</p>
+      <p className="truncate text-xs text-muted-theme">{url}</p>
+      <Button
+        asChild
+        variant="outline"
+        size="sm"
+        className="mt-2 w-fit rounded-full text-xs"
+      >
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          Mở liên kết
+        </a>
+      </Button>
+    </div>
+  );
+};
 
 interface ChatInterfaceProps {
   conversation?: ConversationPreview;
@@ -809,6 +882,9 @@ export function ChatInterface({
           const showRecallAction =
             Boolean(onRecallMessage) && isCurrentUser && !message.isRecalled && !message.error;
 
+          const urlsInMessage = message.content ? extractUrls(message.content) : [];
+          const firstUrl = urlsInMessage[0];
+
           return (
             <div
               key={message.id}
@@ -867,7 +943,9 @@ export function ChatInterface({
                         </p>
                       )}
                       {message.content && (
-                        <p className="text-xs text-muted-theme">{message.content}</p>
+                        <p className="text-xs text-muted-theme whitespace-pre-line break-words">
+                          {renderTextWithLinks(message.content)}
+                        </p>
                       )}
                     </div>
                   ) : message.image ? (
@@ -886,7 +964,9 @@ export function ChatInterface({
                         <p className="text-xs text-muted-theme">{message.image.originalName}</p>
                       )}
                       {message.content && (
-                        <p className="text-sm text-muted-theme">{message.content}</p>
+                        <p className="text-sm text-muted-theme whitespace-pre-line break-words">
+                          {renderTextWithLinks(message.content)}
+                        </p>
                       )}
                     </div>
                   ) : message.file ? (
@@ -917,11 +997,18 @@ export function ChatInterface({
                         )}
                       </div>
                       {message.content && (
-                        <p className="text-sm text-[var(--text-primary)]">{message.content}</p>
+                        <p className="text-sm text-[var(--text-primary)] whitespace-pre-line break-words">
+                          {renderTextWithLinks(message.content)}
+                        </p>
                       )}
                     </div>
                   ) : (
-                    <p className="whitespace-pre-line break-words">{message.content}</p>
+                    <>
+                      <p className="whitespace-pre-line break-words">
+                        {renderTextWithLinks(message.content)}
+                      </p>
+                      {firstUrl ? <LinkPreviewCard url={firstUrl} /> : null}
+                    </>
                   )}
                   {hasError && (
                     <p className="mt-1 text-xs text-red-600">{message.error}</p>

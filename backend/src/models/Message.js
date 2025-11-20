@@ -24,7 +24,7 @@ const messageSchema = new mongoose.Schema(
     },
     messageType: {
       type: String,
-      enum: ['text', 'voice', 'image', 'file'],
+      enum: ['text', 'voice', 'image', 'file', 'call'],
       default: 'text',
     },
     voiceRecording: {
@@ -51,6 +51,9 @@ const messageSchema = new mongoose.Schema(
       originalName: { type: String },
       relativePath: { type: String },
       url: { type: String },
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
     },
     seenBy: {
       type: [

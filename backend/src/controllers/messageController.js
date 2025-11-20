@@ -1,5 +1,6 @@
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
+const User = require('../models/User');
 const { encryptText, decryptText } = require('../utils/encryption');
 const { storeVoiceRecording, storeImageFile, storeFileAttachment } = require('../utils/storage');
 const jwt = require('jsonwebtoken');
@@ -12,6 +13,10 @@ const userSocketMap = new Map(); // Map userId -> Set<socketId>
 const activeCalls = new Map(); // Map callId -> call metadata
 const userActiveCallMap = new Map(); // Map userId -> callId
 const CALL_TYPES = new Set(['audio', 'video']);
+const CALL_LABEL = {
+  audio: 'Cuộc gọi thoại',
+  video: 'Cuộc gọi video',
+};
 
 const setSocketIO = (io) => {
   ioInstance = io;
@@ -86,7 +91,7 @@ const releaseCall = (callId) => {
   return call;
 };
 
-const finalizeCallForUser = (userId, { reason = 'ended', endedBy } = {}) => {
+const finalizeCallForUser = async (userId, { reason = 'ended', endedBy } = {}) => {
   if (!userId) return;
   const callId = userActiveCallMap.get(userId);
   if (!callId) {
@@ -99,6 +104,12 @@ const finalizeCallForUser = (userId, { reason = 'ended', endedBy } = {}) => {
   const payload = { callId, reason, endedBy: endedBy ?? userId };
   emitToUser(call.initiatorId, 'call:ended', payload);
   emitToUser(call.targetUserId, 'call:ended', payload);
+  const callStatus = call.acceptedAt ? 'completed' : 'missed';
+  await createCallSummaryMessage({
+    call,
+    status: callStatus,
+    reason,
+  });
 };
 
 const decodeSocketToken = (token) => {
@@ -175,6 +186,8 @@ const formatMessageForClient = (message, { decryptedContent } = {}) => {
   plain.voiceRecording = sanitizeVoiceRecording(plain.voiceRecording);
   plain.image = sanitizeImage(plain.image);
   plain.file = sanitizeFileAttachment(plain.file);
+  plain.metadata =
+    plain.metadata && typeof plain.metadata === 'object' ? { ...plain.metadata } : undefined;
   return enrichMessageForClient(plain);
 };
 
@@ -409,6 +422,7 @@ const createMessageDocument = async ({
   voiceRecording,
   image,
   fileAttachment,
+  extraData,
 }) => {
   if (!sender) {
     const error = new Error('sender is required');
@@ -416,7 +430,9 @@ const createMessageDocument = async ({
     throw error;
   }
 
-  const normalizedType = ['voice', 'image', 'file'].includes(messageType) ? messageType : 'text';
+  const normalizedType = ['voice', 'image', 'file', 'call', 'text'].includes(messageType)
+    ? messageType
+    : 'text';
   const trimmedSender = sender.trim();
   let trimmedContent = typeof content === 'string' ? content.trim() : '';
 
@@ -487,6 +503,7 @@ const createMessageDocument = async ({
     image: normalizedType === 'image' ? image : undefined,
     file: normalizedType === 'file' ? fileAttachment : undefined,
     conversation: conversation ? conversation._id : undefined,
+    metadata: extraData,
   });
 
   if (conversation) {
@@ -498,6 +515,75 @@ const createMessageDocument = async ({
 
   emitNewMessage(enrichedMessage);
   return enrichedMessage;
+};
+
+const formatCallDurationLabel = (durationSeconds) => {
+  const minutes = Math.floor(durationSeconds / 60);
+  const seconds = durationSeconds % 60;
+  const parts = [];
+  if (minutes > 0) {
+    parts.push(`${minutes} phút`);
+  }
+  parts.push(`${seconds} giây`);
+  return parts.join(' ');
+};
+
+const resolveTimestamp = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+};
+
+const buildCallSummaryMetadata = (call, { status, reason, durationMs, endedAt }) => ({
+  callId: call.id,
+  callType: call.callType,
+  status,
+  reason,
+  durationMs,
+  startedAt: resolveTimestamp(call.startedAt) ?? Date.now(),
+  acceptedAt: resolveTimestamp(call.acceptedAt),
+  endedAt,
+  initiatorId: call.initiatorId,
+  targetUserId: call.targetUserId,
+  initiatorName: call.initiatorName,
+  targetName: call.targetName,
+});
+
+const buildCallSummaryContent = ({ call, status, durationLabel }) => {
+  const callLabel = CALL_LABEL[call.callType] || 'Cuộc gọi';
+  if (status === 'completed' && durationLabel) {
+    return `${callLabel} đã kết thúc (${durationLabel}).`;
+  }
+  const callerName = call.initiatorName || 'Người gọi';
+  return `${callLabel} nhỡ từ ${callerName}.`;
+};
+
+const createCallSummaryMessage = async ({ call, status, reason }) => {
+  if (!call || !call.conversationId) return null;
+  try {
+    const endedAt = Date.now();
+    const acceptedAtTs = call.acceptedAt ? new Date(call.acceptedAt).getTime() : null;
+    const durationMs =
+      status === 'completed' && acceptedAtTs ? Math.max(0, endedAt - acceptedAtTs) : 0;
+    const durationLabel =
+      status === 'completed' && durationMs > 0
+        ? formatCallDurationLabel(Math.round(durationMs / 1000))
+        : null;
+    const content = buildCallSummaryContent({ call, status, durationLabel });
+    const metadata = buildCallSummaryMetadata(call, { status, reason, durationMs, endedAt });
+    return await createMessageDocument({
+      sender: 'Hệ thống',
+      content,
+      conversationId: call.conversationId,
+      messageType: 'call',
+      extraData: metadata,
+    });
+  } catch (error) {
+    console.error('createCallSummaryMessage error:', error);
+    return null;
+  }
 };
 
 const getMessages = async (req, res) => {
@@ -839,6 +925,7 @@ const registerSocketHandlers = (socket) => {
         throw error;
       }
 
+      const targetUser = await User.findById(targetUserId).select('username');
       const delivered = emitToUser(targetUserId, 'call:incoming', {
         callId: normalizedCallId,
         conversationId: normalizedConversationId,
@@ -858,8 +945,13 @@ const registerSocketHandlers = (socket) => {
         conversationId: normalizedConversationId,
         callType: normalizedCallType,
         initiatorId: callerId,
+        initiatorName: callerUsername,
         targetUserId,
+        targetName: targetUser?.username,
         status: 'ringing',
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+        acceptedAt: null,
       });
       userActiveCallMap.set(callerId, normalizedCallId);
       userActiveCallMap.set(targetUserId, normalizedCallId);
@@ -912,12 +1004,18 @@ const registerSocketHandlers = (socket) => {
       }
 
       call.status = 'active';
+      call.acceptedAt = new Date();
       const delivered = emitToUser(call.initiatorId, 'call:answer', {
         callId: normalizedCallId,
         answer,
       });
       if (!delivered) {
         releaseCall(normalizedCallId);
+        await createCallSummaryMessage({
+          call,
+          status: 'missed',
+          reason: 'failed-delivery',
+        });
         const error = new Error('Không thể kết nối với người gọi');
         error.statusCode = 500;
         throw error;
@@ -1009,6 +1107,11 @@ const registerSocketHandlers = (socket) => {
 
       releaseCall(normalizedCallId);
       emitToUser(call.initiatorId, 'call:declined', { callId: normalizedCallId });
+      await createCallSummaryMessage({
+        call,
+        status: 'missed',
+        reason: 'declined',
+      });
       reply({ status: 'ok' });
     } catch (error) {
       reply({
@@ -1048,6 +1151,11 @@ const registerSocketHandlers = (socket) => {
 
       releaseCall(normalizedCallId);
       emitToUser(call.targetUserId, 'call:cancelled', { callId: normalizedCallId });
+      await createCallSummaryMessage({
+        call,
+        status: 'missed',
+        reason: 'cancelled',
+      });
       reply({ status: 'ok' });
     } catch (error) {
       reply({
@@ -1092,6 +1200,12 @@ const registerSocketHandlers = (socket) => {
         reason: reason || 'ended',
         endedBy: userId,
       });
+      const callStatus = call.acceptedAt ? 'completed' : 'missed';
+      await createCallSummaryMessage({
+        call,
+        status: callStatus,
+        reason: reason || (callStatus === 'completed' ? 'ended' : 'missed'),
+      });
       reply({ status: 'ok' });
     } catch (error) {
       reply({
@@ -1105,7 +1219,10 @@ const registerSocketHandlers = (socket) => {
   socket.on('disconnect', () => {
     const userInfo = detachSocketFromUser(socket.id);
     if (userInfo) {
-      finalizeCallForUser(userInfo.userId, { reason: 'disconnect', endedBy: userInfo.userId });
+      void finalizeCallForUser(userInfo.userId, {
+        reason: 'disconnect',
+        endedBy: userInfo.userId,
+      });
     }
   });
 };
