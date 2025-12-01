@@ -915,11 +915,15 @@ export function ChatInterface({
                   </span>
                 )}
                 <div
-                  className={`chat-bubble ${
-                    isCurrentUser ? 'chat-bubble--outgoing' : 'chat-bubble--incoming'
-                  } ${hasError ? 'border border-red-300 bg-red-50' : ''} ${
-                    shouldHighlight ? 'ring-2 ring-blue-200' : ''
-                  }`}
+                  className={
+                    message.image
+                      ? undefined
+                      : `chat-bubble ${
+                          isCurrentUser ? 'chat-bubble--outgoing' : 'chat-bubble--incoming'
+                        } ${hasError ? 'border border-red-300 bg-red-50' : ''} ${
+                          shouldHighlight ? 'ring-2 ring-blue-200' : ''
+                        }`
+                  }
                 >
                   {message.isRecalled ? (
                     <p className="text-sm italic text-muted-theme">Tin nhắn đã được thu hồi</p>
@@ -949,59 +953,44 @@ export function ChatInterface({
                       )}
                     </div>
                   ) : message.image ? (
-                    <div className="flex flex-col gap-2">
+                    <>
                       {message.image.dataUrl || message.image.url ? (
                         <img
                           src={message.image.dataUrl || message.image.url}
                           alt={message.image.originalName || message.image.fileName || 'Hình ảnh'}
                           loading="lazy"
-                          className="max-h-80 w-full max-w-xs rounded-xl object-cover"
+                          className="max-h-96 w-auto max-w-full rounded-2xl object-cover"
                         />
                       ) : (
                         <p className="text-sm text-muted-theme">Không thể hiển thị hình ảnh.</p>
                       )}
-                      {message.image.originalName && (
-                        <p className="text-xs text-muted-theme">{message.image.originalName}</p>
-                      )}
-                      {message.content && (
-                        <p className="text-sm text-muted-theme whitespace-pre-line break-words">
-                          {renderTextWithLinks(message.content)}
-                        </p>
-                      )}
-                    </div>
+                    </>
                   ) : message.file ? (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-3 rounded-2xl border theme-border bg-[var(--surface-bg)] px-3 py-2 shadow-sm transition-colors">
-                        <FileText className="size-5 text-blue-500" />
-                        <div className="flex flex-col">
-                          <span className="text-sm font-semibold text-[var(--text-primary)]">
-                            {message.file.originalName || message.file.fileName || 'Tệp đính kèm'}
+                    <>
+                      {(message.file.url || message.file.dataUrl) ? (
+                        <a
+                          className="inline-flex max-w-full items-center gap-2 text-sm font-semibold hover:underline"
+                          href={message.file.url ?? message.file.dataUrl ?? '#'}
+                          download={message.file.originalName || message.file.fileName || 'file'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <FileText className="size-4 shrink-0" />
+                          <span className="truncate">
+                            {message.file.originalName ||
+                              message.file.fileName ||
+                              'Tải xuống tệp'}
                           </span>
-                          {formatFileSize(message.file.size) && (
-                            <span className="text-xs text-muted-theme">
+                          {formatFileSize(message.file.size) ? (
+                            <span className="text-xs font-normal">
                               {formatFileSize(message.file.size)}
                             </span>
-                          )}
-                        </div>
-                        {(message.file.url || message.file.dataUrl) && (
-                          <a
-                            className="ml-auto flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-600 transition hover:bg-blue-100"
-                            href={message.file.url ?? message.file.dataUrl ?? '#'}
-                            download={message.file.originalName || message.file.fileName || 'file'}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <Download className="size-4" />
-                            Tải xuống
-                          </a>
-                        )}
-                      </div>
-                      {message.content && (
-                        <p className="text-sm text-[var(--text-primary)] whitespace-pre-line break-words">
-                          {renderTextWithLinks(message.content)}
-                        </p>
+                          ) : null}
+                        </a>
+                      ) : (
+                        <p className="text-sm text-muted-theme">Không thể tải tệp.</p>
                       )}
-                    </div>
+                    </>
                   ) : (
                     <>
                       <p className="whitespace-pre-line break-words">
